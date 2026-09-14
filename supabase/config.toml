@@ -1,0 +1,15 @@
+[functions.otp-request]
+verify_jwt = false
+entrypoint = "./functions/otp-request/index.ts"
+
+[functions.otp-verify]
+verify_jwt = false
+entrypoint = "./functions/otp-verify/index.ts"
+
+[functions.discovery-session]
+verify_jwt = true
+entrypoint = "./functions/discovery-session/index.ts"
+
+[functions.discovery-reaction]
+verify_jwt = true
+entrypoint = "./functions/discovery-reaction/index.ts"
