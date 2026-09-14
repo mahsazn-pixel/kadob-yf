@@ -114,7 +114,8 @@ export default function PersonDetailPage() {
 
   const birthdayOccasion = occasions.find(o => o.source === 'birthday')
   const birthdayDays = birthdayOccasion ? daysUntil(birthdayOccasion.occasion_date) : null
-  const isBirthdayWindow = birthdayDays !== null && birthdayDays >= -1 && birthdayDays <= 1
+  const isSelf = person.name === 'خودم'
+  const isBirthdayWindow = birthdayDays !== null && birthdayDays >= -1 && birthdayDays <= 1 && !isSelf
 
   return (
     <div className="min-h-screen bg-stone-50 pb-20">

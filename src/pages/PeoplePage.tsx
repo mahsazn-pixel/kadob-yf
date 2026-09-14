@@ -169,7 +169,7 @@ export default function PeoplePage() {
               <>
                 {selfPerson && (
                   <div className="mb-4">
-                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} />
+                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf />
                   </div>
                 )}
                 {others.length > 0 && (
@@ -317,7 +317,7 @@ export default function PeoplePage() {
   )
 }
 
-function PersonCard({ person, onDelete }: { person: ClosePerson; onDelete: (id: string) => void }) {
+function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson; onDelete: (id: string) => void; isSelf?: boolean }) {
   const [occasions, setOccasions] = useState<Occasion[]>([])
   const [expanded, setExpanded] = useState(false)
   const [showAddOccasion, setShowAddOccasion] = useState(false)
@@ -395,10 +395,10 @@ function PersonCard({ person, onDelete }: { person: ClosePerson; onDelete: (id: 
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-stone-100 overflow-hidden">
+    <div className={`rounded-2xl border overflow-hidden ${isSelf ? 'bg-primary-50 border-primary-300' : 'bg-white border-stone-100'}`}>
       <div className="p-3.5 flex items-center gap-3">
         <Link to={`/people/${person.id}`} className="shrink-0">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 flex items-center justify-center text-white text-lg font-bold overflow-hidden">
+          <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-lg font-bold overflow-hidden ${isSelf ? 'bg-gradient-to-br from-primary-500 to-primary-700' : 'bg-gradient-to-br from-primary-200 to-primary-400'}`}>
             {person.avatar_url ? (
               <img src={person.avatar_url} alt="" className="w-full h-full object-cover" />
             ) : (
@@ -422,9 +422,9 @@ function PersonCard({ person, onDelete }: { person: ClosePerson; onDelete: (id: 
           )}
         </Link>
         <div className="flex items-center gap-1">
-          {isBirthdayWindow && (
+          {isBirthdayWindow && !isSelf && (
             <Link
-              to={`/people/${person.id}`}
+              to={`/discover?person=${person.id}`}
               className="px-3 py-1.5 rounded-lg bg-error-500 text-white text-xs font-medium hover:bg-error-600 transition-colors flex items-center gap-1"
             >
               <PartyPopper size={14} /> تبریک
