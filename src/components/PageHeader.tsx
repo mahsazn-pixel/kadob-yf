@@ -13,11 +13,11 @@ export default function PageHeader({ title, subtitle, back, action }: PageHeader
   const navigate = useNavigate()
   return (
     <header
-      className="sticky top-0 z-40 border-b border-primary-700 px-4 py-3 shadow-md"
+      className="sticky top-0 z-40 border-b border-primary-600 px-4 py-3 shadow-md"
       style={{
         background: `
-          linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 25%, rgba(255,255,255,0.12) 50%, transparent 75%, rgba(0,0,0,0.06) 100%),
-          linear-gradient(135deg, #f5ecd0 0%, #e0c47a 25%, #d4af37 50%, #c9a227 75%, #b08818 100%)
+          linear-gradient(160deg, rgba(255,255,255,0.14) 0%, transparent 45%, rgba(0,0,0,0.06) 100%),
+          linear-gradient(160deg, #d0b893 0%, #C5A880 45%, #b8966a 100%)
         `,
       }}
     >

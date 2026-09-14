@@ -122,7 +122,9 @@ export default function PeoplePage() {
     fetchPeople()
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string, name: string) => {
+    if (name === 'خودم') return
+    if (!window.confirm(`آیا از حذف «${name}» از لیست نزدیکان مطمئن هستید؟`)) return
     await supabase.from('close_people').delete().eq('id', id)
     fetchPeople()
   }
@@ -317,7 +319,7 @@ export default function PeoplePage() {
   )
 }
 
-function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson; onDelete: (id: string) => void; isSelf?: boolean }) {
+function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson; onDelete: (id: string, name: string) => void; isSelf?: boolean }) {
   const [occasions, setOccasions] = useState<Occasion[]>([])
   const [expanded, setExpanded] = useState(false)
   const [showAddOccasion, setShowAddOccasion] = useState(false)
@@ -442,12 +444,15 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
           >
             <Calendar size={18} className="text-stone-400" />
           </button>
-          <button
-            onClick={() => onDelete(person.id)}
-            className="p-1.5 rounded-lg hover:bg-error-50 transition-colors"
-          >
-            <Trash2 size={16} className="text-stone-400" />
-          </button>
+          {!isSelf && (
+            <button
+              onClick={() => onDelete(person.id, person.name)}
+              className="p-1.5 rounded-lg hover:bg-error-50 transition-colors"
+              aria-label={`حذف ${person.name}`}
+            >
+              <Trash2 size={16} className="text-stone-400 hover:text-error-500 transition-colors" />
+            </button>
+          )}
         </div>
       </div>
 

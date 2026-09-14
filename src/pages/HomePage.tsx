@@ -66,8 +66,8 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
       <div className="px-5 pt-12 pb-14 shadow-lg" style={{ background: `
-        linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 25%, rgba(255,255,255,0.12) 50%, transparent 75%, rgba(0,0,0,0.06) 100%),
-        linear-gradient(135deg, #f3eee2 0%, #e8dcc4 25%, #d9c7a3 50%, #C5A880 75%, #b8966a 100%)
+        linear-gradient(160deg, rgba(255,255,255,0.14) 0%, transparent 45%, rgba(0,0,0,0.06) 100%),
+        linear-gradient(160deg, #d0b893 0%, #C5A880 45%, #b8966a 100%)
       ` }}>
         <div className="flex items-center justify-between mb-2">
           <div>

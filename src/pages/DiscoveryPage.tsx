@@ -261,26 +261,48 @@ export default function DiscoveryPage() {
               }
             />
           ) : (
-            <div className="space-y-2">
-              {people.map(person => (
+            (() => {
+              const selfPerson = people.find(p => p.name === 'خودم')
+              const others = people.filter(p => p.name !== 'خودم')
+              const renderPerson = (person: ClosePerson, self: boolean) => (
                 <button
                   key={person.id}
                   onClick={() => { setSelectedPerson(person.id); setStep('budget') }}
-                  className="w-full flex items-center gap-3 p-3.5 rounded-2xl bg-white border border-stone-100 hover:border-primary-300 hover:shadow-md transition-all text-right"
+                  className={`w-full flex items-center gap-3 p-3.5 rounded-2xl border hover:shadow-md transition-all text-right ${
+                    self
+                      ? 'bg-primary-50 border-primary-300 hover:border-primary-400'
+                      : 'bg-white border-stone-100 hover:border-primary-300'
+                  }`}
                 >
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary-200 to-primary-400 flex items-center justify-center text-white text-lg font-bold shrink-0">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-lg font-bold shrink-0 ${
+                    self ? 'bg-gradient-to-br from-primary-500 to-primary-700' : 'bg-gradient-to-br from-primary-200 to-primary-400'
+                  }`}>
                     {person.name.charAt(0)}
                   </div>
                   <div className="flex-1">
                     <p className="font-semibold text-stone-800">{person.name}</p>
                     <p className="text-xs text-stone-500">
-                      {person.closeness === 'very_close' ? 'خیلی نزدیک' : person.closeness === 'close' ? 'نزدیک' : 'آشنا'}
+                      {self ? 'هدیه برای خودم' : person.closeness === 'very_close' ? 'خیلی نزدیک' : person.closeness === 'close' ? 'نزدیک' : 'آشنا'}
                     </p>
                   </div>
                   <ChevronLeft size={20} className="text-stone-400" />
                 </button>
-              ))}
-            </div>
+              )
+              return (
+                <>
+                  {selfPerson && (
+                    <div className="mb-5">
+                      {renderPerson(selfPerson, true)}
+                    </div>
+                  )}
+                  {others.length > 0 && (
+                    <div className="space-y-2">
+                      {others.map(person => renderPerson(person, false))}
+                    </div>
+                  )}
+                </>
+              )
+            })()
           )}
         </div>
       )}
