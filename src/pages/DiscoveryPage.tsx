@@ -443,14 +443,14 @@ export default function DiscoveryPage() {
               href={shopUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-6 py-3 rounded-lg bg-primary-500 text-white font-semibold hover:bg-primary-600 transition-colors mb-3"
+              className="px-6 py-3 rounded-sm bg-primary-500 text-white font-semibold hover:bg-primary-600 transition-colors mb-3"
             >
               مشاهده و خرید محصول
             </a>
           )}
           <button
             onClick={() => navigate('/shopping-list')}
-            className="px-6 py-3 rounded-lg bg-neutral-900 text-white font-medium hover:bg-neutral-800 transition-colors"
+            className="px-6 py-3 rounded-sm bg-neutral-900 text-white font-medium hover:bg-neutral-800 transition-colors"
           >
             لیست خرید من
           </button>
