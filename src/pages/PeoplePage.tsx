@@ -436,7 +436,7 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
             to={`/discover?person=${person.id}`}
             className="px-3 py-1.5 rounded-lg bg-primary-50 text-primary-600 text-xs font-medium hover:bg-primary-100 transition-colors"
           >
-            هدیه بگیر
+            کادو پیدا کن
           </Link>
           <button
             onClick={() => setExpanded(!expanded)}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Heart, Loader2, Trash2, Search, X } from 'lucide-react'
+import { Heart, Loader2, Trash2, Search, X, Eye, EyeOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { WishlistItem, Product, formatPrice } from '../lib/types'
@@ -59,6 +59,12 @@ export default function WishlistPage() {
     fetchItems()
   }
 
+  const toggleVisibility = async (item: WishlistItem) => {
+    const newVisibility = item.visibility === 'public' ? 'private' : 'public'
+    await supabase.from('wishlist_items').update({ visibility: newVisibility }).eq('id', item.id)
+    fetchItems()
+  }
+
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
       <PageHeader
@@ -106,12 +112,25 @@ export default function WishlistPage() {
                     <p className="text-sm text-primary-600 font-bold">
                       {item.product ? formatPrice(item.product.price_amount) : ''}
                     </p>
-                    <button
-                      onClick={() => removeFromWishlist(item.id)}
-                      className="p-1.5 rounded-lg text-stone-400 hover:bg-error-50 hover:text-error-500 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => toggleVisibility(item)}
+                        className="p-1.5 rounded-lg text-stone-400 hover:bg-stone-100 transition-colors"
+                        title={item.visibility === 'public' ? 'عمومی' : 'خصوصی'}
+                      >
+                        {item.visibility === 'public' ? (
+                          <Eye size={16} className="text-success-500" />
+                        ) : (
+                          <EyeOff size={16} className="text-stone-400" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => removeFromWishlist(item.id)}
+                        className="p-1.5 rounded-lg text-stone-400 hover:bg-error-50 hover:text-error-500 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

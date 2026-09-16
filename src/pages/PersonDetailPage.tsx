@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Calendar, Gift, ChevronLeft, Plus, Trash2, Loader2, PartyPopper, Heart } from 'lucide-react'
+import { Calendar, Gift, ChevronLeft, Plus, Trash2, Loader2, PartyPopper, Heart, Lock, Globe } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, ShoppingListItem, Product, formatDate, daysUntil, formatPrice } from '../lib/types'
@@ -15,7 +15,7 @@ export default function PersonDetailPage() {
   const [person, setPerson] = useState<ClosePerson | null>(null)
   const [occasions, setOccasions] = useState<Occasion[]>([])
   const [shoppingItems, setShoppingItems] = useState<ShoppingListItem[]>([])
-  const [wishlistItems, setWishlistItems] = useState<{ product: Product | null }[]>([])
+  const [wishlistItems, setWishlistItems] = useState<{ product: Product | null; visibility: string }[]>([])
   const [linkedProfile, setLinkedProfile] = useState<{ name: string | null; avatar_url: string | null; birth_date: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showAddOccasion, setShowAddOccasion] = useState(false)
@@ -61,11 +61,11 @@ export default function PersonDetailPage() {
 
       const { data: wishData } = await supabase
         .from('wishlist_items')
-        .select('product:products(*)')
+        .select('*, product:products(*)')
         .eq('owner_user_id', personRec.linked_user_id)
-        .eq('visibility', 'public')
+        .in('visibility', ['public', 'private'])
         .order('created_at', { ascending: false })
-      setWishlistItems((wishData || []) as unknown as { product: Product | null }[])
+      setWishlistItems((wishData || []) as unknown as { product: Product | null; visibility: string }[])
     } else {
       setLinkedProfile(null)
       setWishlistItems([])
@@ -144,7 +144,7 @@ export default function PersonDetailPage() {
               onClick={() => navigate(`/discover?person=${person.id}`)}
               className="flex-1 py-2.5 rounded-lg bg-white text-primary-600 font-semibold text-sm hover:bg-primary-50 transition-colors flex items-center justify-center gap-2"
             >
-              <Gift size={18} /> هدیه بگیر
+              <Gift size={18} /> کادو پیدا کن
             </button>
             {isBirthdayWindow && (
               <button
@@ -252,6 +252,11 @@ export default function PersonDetailPage() {
                       {item.product ? formatPrice(item.product.price_amount) : ''}
                     </p>
                   </div>
+                  {item.visibility === 'private' ? (
+                    <Lock size={14} className="text-stone-400 shrink-0" />
+                  ) : (
+                    <Globe size={14} className="text-success-500 shrink-0" />
+                  )}
                 </div>
               ))}
             </div>
