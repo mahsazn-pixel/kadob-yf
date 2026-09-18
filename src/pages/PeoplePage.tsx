@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { UserPlus, Users, X, Loader2, Trash2, Calendar, PartyPopper, Edit2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, daysUntilOccasion, formatOccasionDate, parseMonthDay, composeOccasionDate, sortPeopleByNearestOccasion } from '../lib/types'
+import { ClosePerson, Occasion, MyOccasion, daysUntilOccasion, formatOccasionDate, parseMonthDay, composeOccasionDate, sortPeopleByNearestOccasion } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import {
   getLocalPeople,
@@ -11,11 +11,15 @@ import {
   deleteLocalPerson,
   upsertLocalPerson,
   getLocalOccasions,
-  getAllLocalOccasions,
   createLocalOccasion,
   upsertLocalOccasion,
   deleteLocalOccasion,
   ensureDemoClosePerson,
+  findLocalProfileByPhone,
+  applyLinkedAccountToPerson,
+  getDisplayOccasionsForPerson,
+  getAllDisplayOccasionsForOwner,
+  isOwnOccasion,
 } from '../lib/localStore'
 import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
@@ -30,8 +34,6 @@ export default function PeoplePage() {
   const [showAdd, setShowAdd] = useState(false)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [birthMonth, setBirthMonth] = useState('')
-  const [birthDay, setBirthDay] = useState('')
   const [gender, setGender] = useState('unknown')
   const [closeness, setCloseness] = useState('close')
   const [saving, setSaving] = useState(false)
@@ -50,7 +52,7 @@ export default function PeoplePage() {
     if (user!.id.startsWith('local-')) {
       ensureDemoClosePerson(user!.id)
       const list = getLocalPeople(user!.id)
-      applySorted(list, getAllLocalOccasions())
+      applySorted(list, getAllDisplayOccasionsForOwner(user!.id))
       if (withLoading) setLoading(false)
       return
     }
@@ -61,18 +63,36 @@ export default function PeoplePage() {
         .eq('owner_user_id', user!.id)
         .order('created_at', { ascending: false })
       const list = data || getLocalPeople(user!.id)
-      let occs: Occasion[] = getAllLocalOccasions()
+      let occs: Occasion[] = getAllDisplayOccasionsForOwner(user!.id)
       if (list.length > 0) {
         const { data: occData } = await supabase
           .from('occasions')
           .select('*')
           .in('person_id', list.map(p => p.id))
-        occs = occData || occs
+        const ownByPerson = new Map<string, Occasion[]>()
+        for (const o of (occData || []) as Occasion[]) {
+          const arr = ownByPerson.get(o.person_id) || []
+          arr.push(o)
+          ownByPerson.set(o.person_id, arr)
+        }
+        const linkedIds = list.map(p => p.linked_user_id).filter(Boolean) as string[]
+        let sharedAll: MyOccasion[] = []
+        if (linkedIds.length > 0) {
+          const { data: sharedData } = await supabase
+            .from('my_occasions')
+            .select('*')
+            .in('owner_user_id', linkedIds)
+          sharedAll = (sharedData || []) as MyOccasion[]
+        }
+        occs = list.flatMap(p => getDisplayOccasionsForPerson(p, {
+          own: ownByPerson.get(p.id) || getLocalOccasions(p.id),
+          shared: p.linked_user_id ? sharedAll.filter(s => s.owner_user_id === p.linked_user_id) : [],
+        }))
       }
       applySorted(list, occs)
     } catch {
       const list = getLocalPeople(user!.id)
-      applySorted(list, getAllLocalOccasions())
+      applySorted(list, getAllDisplayOccasionsForOwner(user!.id))
     } finally {
       if (withLoading) setLoading(false)
     }
@@ -86,29 +106,26 @@ export default function PeoplePage() {
       setError('نام را وارد کنید')
       return
     }
-    let birthDateStr: string | null = null
-    if (birthMonth && birthDay) {
-      const now = new Date()
-      const monthNum = parseInt(birthMonth, 10)
-      const dayNum = parseInt(birthDay, 10)
-      const thisYear = now.getFullYear()
-      const candidate = new Date(thisYear, monthNum - 1, dayNum)
-      candidate.setHours(0, 0, 0, 0)
-      now.setHours(0, 0, 0, 0)
-      const yearToUse = candidate < now ? thisYear + 1 : thisYear
-      birthDateStr = `${yearToUse}-${birthMonth.padStart(2, '0')}-${birthDay.padStart(2, '0')}`
-    }
     setSaving(true)
     const isLocal = user!.id.startsWith('local-')
     let linkedUserId: string | null = null
-    if (!isLocal && phone) {
+    let birthDateStr: string | null = null
+    if (phone) {
+      const localMatch = findLocalProfileByPhone(phone)
+      if (localMatch) {
+        linkedUserId = localMatch.id
+        birthDateStr = localMatch.birth_date
+      }
+    }
+    if (!isLocal && phone && !linkedUserId) {
       try {
         const { data: profileMatch } = await supabase
           .from('profiles')
-          .select('id')
+          .select('id, birth_date')
           .eq('phone_number', phone)
           .maybeSingle()
         linkedUserId = profileMatch?.id || null
+        birthDateStr = profileMatch?.birth_date || null
       } catch {
         linkedUserId = null
       }
@@ -155,42 +172,13 @@ export default function PeoplePage() {
         })
       }
     }
-    if (birthDateStr && newPerson) {
-      if (isLocal) {
-        createLocalOccasion({
-          person_id: newPerson.id,
-          title: 'تولد',
-          occasion_date: birthDateStr,
-          source: 'birthday',
-          repeats_yearly: true,
-        })
-      } else {
-        try {
-          const { error: occError } = await supabase.from('occasions').insert({
-            person_id: newPerson.id,
-            title: 'تولد',
-            occasion_date: birthDateStr,
-            source: 'birthday',
-            repeats_yearly: true,
-          })
-          if (occError) throw occError
-        } catch {
-          createLocalOccasion({
-            person_id: newPerson.id,
-            title: 'تولد',
-            occasion_date: birthDateStr,
-            source: 'birthday',
-            repeats_yearly: true,
-          })
-        }
-      }
+    if (newPerson && linkedUserId) {
+      applyLinkedAccountToPerson({ ...newPerson, linked_user_id: linkedUserId })
     }
     const invitePhone = phone
     const shouldInvite = sendInvite && /^09\d{9}$/.test(invitePhone)
     setName('')
     setPhone('')
-    setBirthMonth('')
-    setBirthDay('')
     setGender('unknown')
     setCloseness('close')
     setSendInvite(false)
@@ -338,41 +326,6 @@ export default function PeoplePage() {
                 )}
               </div>
               <div>
-                <label className="text-sm text-stone-600 mb-1 block">تاریخ تولد (اختیاری)</label>
-                <div className="flex gap-2">
-                  <select
-                    value={birthMonth}
-                    onChange={(e) => setBirthMonth(e.target.value)}
-                    className="flex-1 px-3 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all text-sm"
-                  >
-                    <option value="">ماه</option>
-                    <option value="01">فروردین</option>
-                    <option value="02">اردیبهشت</option>
-                    <option value="03">خرداد</option>
-                    <option value="04">تیر</option>
-                    <option value="05">مرداد</option>
-                    <option value="06">شهریور</option>
-                    <option value="07">مهر</option>
-                    <option value="08">آبان</option>
-                    <option value="09">آذر</option>
-                    <option value="10">دی</option>
-                    <option value="11">بهمن</option>
-                    <option value="12">اسفند</option>
-                  </select>
-                  <select
-                    value={birthDay}
-                    onChange={(e) => setBirthDay(e.target.value)}
-                    className="flex-1 px-3 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all text-sm"
-                  >
-                    <option value="">روز</option>
-                    {Array.from({ length: 31 }, (_, i) => {
-                      const d = String(i + 1).padStart(2, '0')
-                      return <option key={d} value={d}>{String(i + 1).padStart(2, '0')}</option>
-                    })}
-                  </select>
-                </div>
-              </div>
-              <div>
                 <label className="text-sm text-stone-600 mb-1 block">جنسیت</label>
                 <div className="flex gap-2">
                   {[
@@ -451,7 +404,7 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
   }, [person.id])
 
   const fetchOccasions = async () => {
-    const local = getLocalOccasions(person.id)
+    const local = getDisplayOccasionsForPerson(person)
     if (person.owner_user_id.startsWith('local-')) {
       setOccasions(local)
       return
@@ -462,7 +415,20 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
         .select('*')
         .eq('person_id', person.id)
         .order('occasion_date', { ascending: true })
-      setOccasions(data || local)
+      let shared: MyOccasion[] = []
+      if (person.linked_user_id) {
+        const visibilities = person.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
+        const { data: sharedData } = await supabase
+          .from('my_occasions')
+          .select('*')
+          .eq('owner_user_id', person.linked_user_id)
+          .in('visibility', visibilities)
+        shared = (sharedData || []) as MyOccasion[]
+      }
+      setOccasions(getDisplayOccasionsForPerson(person, {
+        own: (data as Occasion[] | null) || getLocalOccasions(person.id),
+        shared,
+      }))
     } catch {
       setOccasions(local)
     }
@@ -507,6 +473,8 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
   }
 
   const handleDeleteOccasion = async (id: string) => {
+    const target = occasions.find(o => o.id === id)
+    if (target && !isOwnOccasion(target)) return
     deleteLocalOccasion(id)
     if (!person.owner_user_id.startsWith('local-')) {
       try {
@@ -521,6 +489,7 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
   }
 
   const startEditOccasion = (occ: Occasion) => {
+    if (!isOwnOccasion(occ)) return
     setShowAddOccasion(false)
     setEditingId(occ.id)
     setEditTitle(occ.title)
@@ -534,7 +503,7 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
     if (!editingId || !editTitle.trim() || !editMonth || !editDay) return
     setSavingEdit(true)
     const existing = occasions.find(o => o.id === editingId)
-    if (!existing) {
+    if (!existing || !isOwnOccasion(existing)) {
       setSavingEdit(false)
       return
     }
@@ -724,6 +693,7 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
                     </div>
                   )
                 }
+                const canEdit = isOwnOccasion(occ)
                 return (
                   <div key={occ.id} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-stone-50">
                     <div>
@@ -738,20 +708,24 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
                           {days === 0 ? 'امروز' : days === 1 ? 'فردا' : 'دیروز'}
                         </span>
                       )}
-                      <button
-                        onClick={() => startEditOccasion(occ)}
-                        className="text-stone-300 hover:text-primary-500"
-                        aria-label={`ویرایش ${occ.title}`}
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteOccasion(occ.id)}
-                        className="text-stone-300 hover:text-error-500"
-                        aria-label={`حذف ${occ.title}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => startEditOccasion(occ)}
+                            className="text-stone-300 hover:text-primary-500"
+                            aria-label={`ویرایش ${occ.title}`}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteOccasion(occ.id)}
+                            className="text-stone-300 hover:text-error-500"
+                            aria-label={`حذف ${occ.title}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )

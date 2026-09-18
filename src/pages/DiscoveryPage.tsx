@@ -55,6 +55,7 @@ export default function DiscoveryPage() {
   const [toastMsg, setToastMsg] = useState('')
   const [localDeck, setLocalDeck] = useState<Card[]>([])
   const [localReactions, setLocalReactions] = useState<{ product_id: string; reaction: ReactionType }[]>([])
+  const [wheelSpinning, setWheelSpinning] = useState(false)
   const isLocalUser = !!user?.id.startsWith('local-')
 
   useEffect(() => {
@@ -106,8 +107,10 @@ export default function DiscoveryPage() {
     return true
   }
 
-  const startSession = async () => {
-    if (!selectedPerson) return
+  const startSession = async (personOverride?: string) => {
+    const receiverId = personOverride || selectedPerson
+    if (!receiverId) return
+    if (personOverride) setSelectedPerson(personOverride)
     setLoading(true)
     setError('')
     if (isLocalUser) {

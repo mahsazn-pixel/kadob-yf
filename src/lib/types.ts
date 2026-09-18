@@ -29,6 +29,7 @@ export interface Occasion {
   occasion_date: string
   repeats_yearly?: boolean
   source: string
+  shared?: boolean
   created_at: string
   updated_at: string
 }
@@ -204,6 +205,13 @@ export function parseMonthDay(dateStr: string): { month: string; day: string } {
 
 export function toMonthDay(month: string | number, day: string | number): string {
   return `${pad2(month)}-${pad2(day)}`
+}
+
+export function sameMonthDay(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  const left = parseMonthDay(a)
+  const right = parseMonthDay(b)
+  return left.month === right.month && left.day === right.day
 }
 
 export function composeOccasionDate(month: string | number, day: string | number): string {

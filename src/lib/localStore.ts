@@ -1,4 +1,4 @@
-import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus } from './types'
+import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus, sameMonthDay } from './types'
 import { getCatalogProduct } from './catalog'
 
 const PEOPLE_KEY = 'kadoba_local_people'
@@ -98,6 +98,13 @@ export function getLocalProfile(userId: string): Profile | null {
   return all[userId] || null
 }
 
+export function findLocalProfileByPhone(phone: string): Profile | null {
+  const normalized = phone.replace(/\D/g, '')
+  if (!normalized) return null
+  const all = readJson<Record<string, Profile>>(PROFILE_KEY, {})
+  return Object.values(all).find(p => (p.phone_number || '').replace(/\D/g, '') === normalized) || null
+}
+
 export function saveLocalProfile(profile: Profile): Profile {
   const all = readJson<Record<string, Profile>>(PROFILE_KEY, {})
   const next = {
@@ -113,7 +120,8 @@ export function saveLocalProfile(profile: Profile): Profile {
 export function getUpcomingLocalOccasions(ownerUserId: string, limit = 3) {
   const people = getLocalPeople(ownerUserId)
   const names = new Map(people.map(p => [p.id, p.name]))
-  return getAllLocalOccasions()
+  return people
+    .flatMap(p => getDisplayOccasionsForPerson(p))
     .filter(o => names.has(o.person_id))
     .map(o => ({ ...o, person_name: names.get(o.person_id) }))
 }
@@ -200,6 +208,81 @@ export function getVisibleLocalMyOccasions(ownerUserId: string, closeness: strin
   return getLocalMyOccasions(ownerUserId).filter(o => (
     o.visibility === 'public' || closeness === 'very_close'
   ))
+}
+
+export function mergePersonOccasionsWithShared(
+  personId: string,
+  ownOccasions: Occasion[],
+  shared: MyOccasion[],
+): Occasion[] {
+  const merged = [...ownOccasions]
+  for (const item of shared) {
+    const duplicate = merged.some(o =>
+      o.title === item.title && sameMonthDay(o.occasion_date, item.occasion_date)
+    )
+    if (duplicate) continue
+    merged.push({
+      id: `shared-${item.id}`,
+      person_id: personId,
+      title: item.title,
+      occasion_date: item.occasion_date,
+      repeats_yearly: item.repeats_yearly,
+      source: item.title === 'تولد' ? 'birthday' : 'shared',
+      shared: true,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    })
+  }
+  return merged.sort((a, b) => a.occasion_date.localeCompare(b.occasion_date))
+}
+
+export function getDisplayOccasionsForPerson(
+  person: ClosePerson,
+  options?: { own?: Occasion[]; shared?: MyOccasion[]; linkedBirthDate?: string | null },
+): Occasion[] {
+  const own = options?.own ?? getLocalOccasions(person.id)
+  if (!person.linked_user_id) return own
+  const linked = getLocalProfile(person.linked_user_id)
+  const birth = options?.linkedBirthDate ?? linked?.birth_date ?? null
+  const extras = [...(options?.shared ?? getVisibleLocalMyOccasions(person.linked_user_id, person.closeness))]
+    .filter(o => o.visibility === 'public' || person.closeness === 'very_close')
+  if (birth && !extras.some(o => o.title === 'تولد')) {
+    extras.unshift({
+      id: `linked-bday-${person.linked_user_id}`,
+      owner_user_id: person.linked_user_id,
+      title: 'تولد',
+      occasion_date: birth,
+      repeats_yearly: true,
+      visibility: 'public',
+      created_at: linked?.created_at || person.created_at,
+      updated_at: linked?.updated_at || person.updated_at,
+    })
+  }
+  const ownFiltered = birth
+    ? own.filter(o => o.source !== 'birthday' && o.title !== 'تولد')
+    : own
+  return mergePersonOccasionsWithShared(person.id, ownFiltered, extras)
+}
+
+export function getAllDisplayOccasionsForOwner(ownerUserId: string): Occasion[] {
+  return getLocalPeople(ownerUserId).flatMap(p => getDisplayOccasionsForPerson(p))
+}
+
+export function applyLinkedAccountToPerson(person: ClosePerson): { person: ClosePerson; occasions: Occasion[] } {
+  if (!person.linked_user_id) {
+    return { person, occasions: getLocalOccasions(person.id) }
+  }
+  const linked = getLocalProfile(person.linked_user_id)
+  let next = person
+  if (linked?.birth_date && person.birth_date !== linked.birth_date) {
+    next = { ...person, birth_date: linked.birth_date, updated_at: new Date().toISOString() }
+    upsertLocalPerson(next)
+  }
+  return { person: next, occasions: getDisplayOccasionsForPerson(next) }
+}
+
+export function isOwnOccasion(occ: Occasion): boolean {
+  return !occ.shared && occ.source !== 'shared'
 }
 
 export function createLocalMyOccasion(input: {
@@ -452,26 +535,6 @@ export function ensureDemoClosePerson(ownerUserId: string) {
     birth_date: birthDate,
     gender: 'male',
     closeness: 'very_close',
-    created_at: now,
-    updated_at: now,
-  })
-  upsertLocalOccasion({
-    id: 'demo-occ-birthday',
-    person_id: DEMO_PERSON_ID,
-    title: 'تولد',
-    occasion_date: birthDate,
-    repeats_yearly: true,
-    source: 'birthday',
-    created_at: now,
-    updated_at: now,
-  })
-  upsertLocalOccasion({
-    id: 'demo-occ-work',
-    person_id: DEMO_PERSON_ID,
-    title: 'سالگرد شروع کار',
-    occasion_date: `${new Date().getFullYear()}-06-12`,
-    repeats_yearly: true,
-    source: 'manual',
     created_at: now,
     updated_at: now,
   })

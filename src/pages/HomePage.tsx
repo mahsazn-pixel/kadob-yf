@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom'
 import { Gift, Calendar, ChevronLeft, Sparkles, Bell, ShoppingBag, PartyPopper } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
-import { ClosePerson, Occasion, ShoppingListItem, daysUntilOccasion, formatRemainingTime, sortPeopleByNearestOccasion } from '../lib/types'
-import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson } from '../lib/localStore'
+import { ClosePerson, Occasion, MyOccasion, ShoppingListItem, daysUntilOccasion, formatRemainingTime, sortPeopleByNearestOccasion } from '../lib/types'
+import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson, getDisplayOccasionsForPerson, getLocalOccasions } from '../lib/localStore'
 import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
 
@@ -54,11 +54,27 @@ export default function HomePage() {
           .select('*')
           .in('person_id', personIds)
           .order('occasion_date', { ascending: true })
-
-        const occasionsWithNames = (occasionsData || []).map(o => {
-          const person = peopleList.find(p => p.id === o.person_id)
-          return { ...o, person_name: person?.name }
-        })
+        const ownByPerson = new Map<string, Occasion[]>()
+        for (const o of (occasionsData || []) as Occasion[]) {
+          const arr = ownByPerson.get(o.person_id) || []
+          arr.push(o)
+          ownByPerson.set(o.person_id, arr)
+        }
+        const linkedIds = peopleList.map(p => p.linked_user_id).filter(Boolean) as string[]
+        let sharedAll: MyOccasion[] = []
+        if (linkedIds.length > 0) {
+          const { data: sharedData } = await supabase
+            .from('my_occasions')
+            .select('*')
+            .in('owner_user_id', linkedIds)
+          sharedAll = (sharedData || []) as MyOccasion[]
+        }
+        const occasionsWithNames = peopleList.flatMap(person => (
+          getDisplayOccasionsForPerson(person, {
+            own: ownByPerson.get(person.id) || getLocalOccasions(person.id),
+            shared: person.linked_user_id ? sharedAll.filter(s => s.owner_user_id === person.linked_user_id) : [],
+          }).map(o => ({ ...o, person_name: person.name }))
+        ))
 
         setPeople(sortPeopleByNearestOccasion(peopleList, occasionsWithNames))
         const upcoming = occasionsWithNames

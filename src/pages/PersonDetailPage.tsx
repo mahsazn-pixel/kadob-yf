@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Calendar, Gift, Trash2, Loader2, PartyPopper, Heart, Lock, Globe, Edit2 } from 'lucide-react'
+import { Calendar, Gift, Trash2, Loader2, PartyPopper, Heart, Edit2, ShoppingBag, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, Product, MyOccasion, Greeting, formatMonthDay, daysUntilOccasion, formatOccasionDate, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
+import { ClosePerson, Occasion, Product, MyOccasion, Greeting, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import GreetingModal from '../components/GreetingModal'
-import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, getVisibleLocalMyOccasions, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist } from '../lib/localStore'
+import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 
@@ -16,7 +16,9 @@ export default function PersonDetailPage() {
   const navigate = useNavigate()
   const [person, setPerson] = useState<ClosePerson | null>(null)
   const [occasions, setOccasions] = useState<Occasion[]>([])
-  const [wishlistItems, setWishlistItems] = useState<{ product: Product | null; visibility: string }[]>([])
+  const [wishlistItems, setWishlistItems] = useState<{ id?: string; product_id?: string; product: Product | null; visibility: string }[]>([])
+  const [shopStatus, setShopStatus] = useState<Record<string, { id: string; status: string }>>({})
+  const [updatingProduct, setUpdatingProduct] = useState<string | null>(null)
   const [linkedProfile, setLinkedProfile] = useState<{ name: string | null; avatar_url: string | null; birth_date: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showAddOccasion, setShowAddOccasion] = useState(false)
@@ -30,7 +32,6 @@ export default function PersonDetailPage() {
   const [editDay, setEditDay] = useState('')
   const [editRepeats, setEditRepeats] = useState(true)
   const [savingEdit, setSavingEdit] = useState(false)
-  const [sharedOccasions, setSharedOccasions] = useState<MyOccasion[]>([])
   const [showGreeting, setShowGreeting] = useState(false)
   const [approvedGreetings, setApprovedGreetings] = useState<Greeting[]>([])
 
@@ -43,8 +44,9 @@ export default function PersonDetailPage() {
     setLoading(true)
     const applyLocal = () => {
       const personRec = getAllLocalPeople().find(p => p.id === id!) || null
-      setPerson(personRec)
-      setOccasions(getLocalOccasions(id!))
+      const synced = personRec ? applyLinkedAccountToPerson(personRec) : null
+      setPerson(synced?.person || personRec)
+      setOccasions(synced?.occasions || (personRec ? getDisplayOccasionsForPerson(personRec) : []))
       if (personRec?.linked_user_id) {
         const linked = getLocalProfile(personRec.linked_user_id)
         setLinkedProfile(linked ? { name: linked.name, avatar_url: linked.avatar_url, birth_date: linked.birth_date } : null)
@@ -52,12 +54,10 @@ export default function PersonDetailPage() {
         const visibleWish = getLocalWishlist(personRec.linked_user_id).filter(item => (
           item.visibility === 'public' || closeness === 'very_close'
         ))
-        setWishlistItems(visibleWish.map(item => ({ product: item.product, visibility: item.visibility })))
-        setSharedOccasions(getVisibleLocalMyOccasions(personRec.linked_user_id, closeness))
+        setWishlistItems(visibleWish.map(item => ({ id: item.id, product_id: item.product_id, product: item.product, visibility: item.visibility })))
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
-        setSharedOccasions([])
       }
       const personGreetings = getLocalGreetingsForPerson(id!, ['approved'])
       const linkedGreetings = personRec?.linked_user_id ? getLocalGreetingsForReceiver(personRec.linked_user_id, ['approved']) : []
@@ -67,6 +67,12 @@ export default function PersonDetailPage() {
         if (!merged.some(p => p.id === g.id)) merged.push(g)
       }
       setApprovedGreetings(merged)
+      const shopping = getLocalShoppingItems(user!.id).filter(i => i.receiver_id === id)
+      const map: Record<string, { id: string; status: string }> = {}
+      for (const s of shopping) {
+        if (s.product_id) map[s.product_id] = { id: s.id, status: s.status }
+      }
+      setShopStatus(map)
     }
     if (user!.id.startsWith('local-')) {
       applyLocal()
@@ -87,7 +93,6 @@ export default function PersonDetailPage() {
         .select('*')
         .eq('person_id', id!)
         .order('occasion_date', { ascending: true })
-      setOccasions(occasionsData || [])
 
       if (personRec?.linked_user_id) {
         const { data: profileData } = await supabase
@@ -96,6 +101,9 @@ export default function PersonDetailPage() {
           .eq('id', personRec.linked_user_id)
           .maybeSingle()
         setLinkedProfile(profileData as typeof linkedProfile)
+        if (profileData?.birth_date && personRec.birth_date !== profileData.birth_date) {
+          setPerson({ ...personRec, birth_date: profileData.birth_date })
+        }
 
         const { data: wishData } = await supabase
           .from('wishlist_items')
@@ -103,7 +111,7 @@ export default function PersonDetailPage() {
           .eq('owner_user_id', personRec.linked_user_id)
           .in('visibility', ['public', 'private'])
           .order('created_at', { ascending: false })
-        setWishlistItems((wishData || []) as unknown as { product: Product | null; visibility: string }[])
+        setWishlistItems((wishData || []) as unknown as { id?: string; product_id?: string; product: Product | null; visibility: string }[])
         const visibilities = personRec.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
         const { data: sharedData } = await supabase
           .from('my_occasions')
@@ -111,18 +119,39 @@ export default function PersonDetailPage() {
           .eq('owner_user_id', personRec.linked_user_id)
           .in('visibility', visibilities)
           .order('occasion_date', { ascending: true })
-        setSharedOccasions((sharedData || []) as MyOccasion[])
+        setOccasions(getDisplayOccasionsForPerson(personRec, {
+          own: (occasionsData as Occasion[] | null) || getLocalOccasions(id!),
+          shared: (sharedData || []) as MyOccasion[],
+          linkedBirthDate: profileData?.birth_date || null,
+        }))
         const { data: greetingData } = await supabase
           .from('greetings')
           .select('*')
           .eq('status', 'approved')
           .or(`receiver_person_id.eq.${id},receiver_user_id.eq.${personRec.linked_user_id}`)
         setApprovedGreetings((greetingData || []) as Greeting[])
+        const { data: shopData } = await supabase
+          .from('shopping_list_items')
+          .select('id, product_id, status')
+          .eq('user_id', user!.id)
+          .eq('receiver_id', id!)
+        const map: Record<string, { id: string; status: string }> = {}
+        for (const s of (shopData || []) as { id: string; product_id: string; status: string }[]) {
+          if (s.product_id) map[s.product_id] = { id: s.id, status: s.status }
+        }
+        if (Object.keys(map).length === 0) {
+          const shopping = getLocalShoppingItems(user!.id).filter(i => i.receiver_id === id)
+          for (const s of shopping) {
+            if (s.product_id) map[s.product_id] = { id: s.id, status: s.status }
+          }
+        }
+        setShopStatus(map)
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
-        setSharedOccasions([])
+        setOccasions((occasionsData as Occasion[] | null) || getLocalOccasions(id!))
         setApprovedGreetings(getLocalGreetingsForPerson(id!, ['approved']))
+        setShopStatus({})
       }
     } catch {
       applyLocal()
@@ -164,6 +193,7 @@ export default function PersonDetailPage() {
   }
 
   const startEditOccasion = (occ: Occasion) => {
+    if (!isOwnOccasion(occ)) return
     setShowAddOccasion(false)
     setEditingId(occ.id)
     setEditTitle(occ.title)
@@ -177,7 +207,7 @@ export default function PersonDetailPage() {
     if (!editingId || !editTitle.trim() || !editMonth || !editDay || !person) return
     setSavingEdit(true)
     const existing = occasions.find(o => o.id === editingId)
-    if (!existing) {
+    if (!existing || !isOwnOccasion(existing)) {
       setSavingEdit(false)
       return
     }
@@ -216,6 +246,8 @@ export default function PersonDetailPage() {
   }
 
   const handleDeleteOccasion = async (occId: string) => {
+    const target = occasions.find(o => o.id === occId)
+    if (target && !isOwnOccasion(target)) return
     deleteLocalOccasion(occId)
     if (!user!.id.startsWith('local-')) {
       try {
@@ -225,6 +257,83 @@ export default function PersonDetailPage() {
       }
     }
     fetchData()
+  }
+
+  const productKey = (item: { id?: string; product_id?: string; product: Product | null }) =>
+    item.product_id || item.product?.id || item.id || ''
+
+  const handleReserve = async (item: { product_id?: string; product: Product | null }) => {
+    if (!user || !person) return
+    const productId = item.product_id || item.product?.id
+    if (!productId) return
+    setUpdatingProduct(productId)
+    const localItem = createLocalShoppingItem({
+      user_id: user.id,
+      receiver_id: person.id,
+      product_id: productId,
+    })
+    setShopStatus(prev => ({ ...prev, [productId]: { id: localItem.id, status: 'reserved' } }))
+    if (!user.id.startsWith('local-')) {
+      try {
+        const { data } = await supabase.from('shopping_list_items').insert({
+          user_id: user.id,
+          receiver_id: person.id,
+          product_id: productId,
+          status: 'reserved',
+          reserved_at: new Date().toISOString(),
+        }).select('id').maybeSingle()
+        if (data?.id) {
+          setShopStatus(prev => ({ ...prev, [productId]: { id: data.id, status: 'reserved' } }))
+        }
+      } catch {
+        // local fallback
+      }
+    }
+    setUpdatingProduct(null)
+  }
+
+  const handleMarkPurchased = async (item: { product_id?: string; product: Product | null }) => {
+    if (!user || !person) return
+    const productId = item.product_id || item.product?.id
+    if (!productId) return
+    setUpdatingProduct(productId)
+    const now = new Date().toISOString()
+    let shopId = shopStatus[productId]?.id
+    if (!shopId) {
+      const created = createLocalShoppingItem({
+        user_id: user.id,
+        receiver_id: person.id,
+        product_id: productId,
+      })
+      shopId = created.id
+      updateLocalShoppingItem(shopId, { status: 'purchased', purchased_at: now })
+    } else {
+      updateLocalShoppingItem(shopId, { status: 'purchased', purchased_at: now })
+    }
+    setShopStatus(prev => ({ ...prev, [productId]: { id: shopId!, status: 'purchased' } }))
+    if (!user.id.startsWith('local-')) {
+      try {
+        if (shopStatus[productId]?.id) {
+          await supabase.from('shopping_list_items').update({
+            status: 'purchased',
+            purchased_at: now,
+            updated_at: now,
+          }).eq('id', shopStatus[productId].id)
+        } else {
+          await supabase.from('shopping_list_items').insert({
+            user_id: user.id,
+            receiver_id: person.id,
+            product_id: productId,
+            status: 'purchased',
+            reserved_at: now,
+            purchased_at: now,
+          })
+        }
+      } catch {
+        // local fallback
+      }
+    }
+    setUpdatingProduct(null)
   }
 
   if (loading) {
@@ -267,10 +376,9 @@ export default function PersonDetailPage() {
             </div>
             <div>
               <h2 className="text-xl font-bold">{person.name}</h2>
-              <p className="text-sm text-white/80">
-                {person.closeness === 'very_close' ? 'خیلی نزدیک' : person.closeness === 'close' ? 'نزدیک' : 'آشنا'}
-                {displayBirthDate && ` • متولد ${formatMonthDay(displayBirthDate)}`}
-              </p>
+              {displayBirthDate && (
+                <p className="text-sm text-white/80">متولد {formatMonthDay(displayBirthDate)}</p>
+              )}
             </div>
           </div>
           <div className="flex gap-2 mt-4">
@@ -377,6 +485,7 @@ export default function PersonDetailPage() {
                     </div>
                   )
                 }
+                const canEdit = isOwnOccasion(occ)
                 return (
                   <div key={occ.id} className={`flex items-center justify-between p-3 rounded-xl border ${
                     inWindow ? 'bg-primary-50 border-primary-200' : 'bg-white border-stone-100'
@@ -384,7 +493,7 @@ export default function PersonDetailPage() {
                     <div>
                       <p className="text-sm font-medium text-stone-800">{occ.title}</p>
                       <p className="text-xs text-stone-500">
-                        {formatOccasionDate(occ)}
+                        {formatMonthDay(occ.occasion_date)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -396,20 +505,24 @@ export default function PersonDetailPage() {
                           {days === 0 ? 'امروز!' : days === 1 ? 'فردا' : 'دیروز'}
                         </span>
                       )}
-                      <button
-                        onClick={() => startEditOccasion(occ)}
-                        className="text-stone-300 hover:text-primary-500"
-                        aria-label={`ویرایش ${occ.title}`}
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteOccasion(occ.id)}
-                        className="text-stone-300 hover:text-error-500"
-                        aria-label={`حذف ${occ.title}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => startEditOccasion(occ)}
+                            className="text-stone-300 hover:text-primary-500"
+                            aria-label={`ویرایش ${occ.title}`}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteOccasion(occ.id)}
+                            className="text-stone-300 hover:text-error-500"
+                            aria-label={`حذف ${occ.title}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
@@ -436,30 +549,6 @@ export default function PersonDetailPage() {
           </section>
         )}
 
-        {sharedOccasions.length > 0 && (
-          <section className="mb-6">
-            <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
-              <Calendar size={18} className="text-secondary-500" />
-              مناسبت‌های اشتراک‌گذاری‌شده
-            </h3>
-            <div className="space-y-2">
-              {sharedOccasions.map(occ => (
-                <div key={occ.id} className="flex items-center justify-between p-3 rounded-xl bg-white border border-stone-100">
-                  <div>
-                    <p className="text-sm font-medium text-stone-800">{occ.title}</p>
-                    <p className="text-xs text-stone-500">{formatOccasionDate(occ)}</p>
-                  </div>
-                  {occ.visibility === 'very_close' ? (
-                    <Lock size={14} className="text-stone-400" />
-                  ) : (
-                    <Globe size={14} className="text-success-500" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
         {person.linked_user_id && wishlistItems.length > 0 && (
           <section className="mb-6">
             <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
@@ -467,24 +556,69 @@ export default function PersonDetailPage() {
               لیست خواسته‌ها
             </h3>
             <div className="space-y-2">
-              {wishlistItems.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-white border border-stone-100">
-                  {item.product?.image_url && (
-                    <img src={item.product.image_url} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title}</p>
-                    <p className="text-xs text-stone-500">
-                      {item.product ? formatPrice(item.product.price_amount) : ''}
-                    </p>
+              {wishlistItems.map((item, idx) => {
+                const pid = productKey(item)
+                const current = pid ? shopStatus[pid] : undefined
+                const busy = updatingProduct === pid
+                return (
+                  <div key={pid || idx} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
+                    <div className="flex items-center gap-3 p-3">
+                      {item.product?.image_url && (
+                        <img src={item.product.image_url} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title}</p>
+                        <p className="text-xs text-stone-500">
+                          {item.product ? formatPrice(item.product.price_amount) : ''}
+                        </p>
+                      </div>
+                      {busy && <Loader2 size={16} className="animate-spin text-stone-400 shrink-0" />}
+                    </div>
+                    <div className="flex border-t border-stone-100">
+                      {item.product?.shop_url && (
+                        <a
+                          href={item.product.shop_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 py-2 text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors flex items-center justify-center gap-1"
+                        >
+                          <ShoppingBag size={14} /> خرید
+                        </a>
+                      )}
+                      {current?.status === 'purchased' || current?.status === 'gifted' ? (
+                        <div className="flex-1 py-2 text-xs font-medium text-success-600 flex items-center justify-center gap-1 border-r border-stone-100">
+                          <Check size={14} /> خریدم
+                        </div>
+                      ) : current?.status === 'reserved' ? (
+                        <button
+                          onClick={() => handleMarkPurchased(item)}
+                          disabled={busy}
+                          className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                        >
+                          <Check size={14} /> خریدم
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => handleReserve(item)}
+                            disabled={busy}
+                            className="flex-1 py-2 text-xs font-medium text-error-600 hover:bg-error-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                          >
+                            رزرو
+                          </button>
+                          <button
+                            onClick={() => handleMarkPurchased(item)}
+                            disabled={busy}
+                            className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                          >
+                            <Check size={14} /> خریدم
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  {item.visibility === 'private' ? (
-                    <Lock size={14} className="text-stone-400 shrink-0" />
-                  ) : (
-                    <Globe size={14} className="text-success-500 shrink-0" />
-                  )}
-                </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}

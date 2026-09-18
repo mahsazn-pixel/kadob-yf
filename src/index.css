@@ -34,6 +34,24 @@
   animation: heartPulse 0.8s ease-in-out infinite;
 }
 
+@keyframes wheelIdle {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes wheelSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(1080deg); }
+}
+
+.gift-wheel-idle {
+  animation: wheelIdle 18s linear infinite;
+}
+
+.gift-wheel-spin {
+  animation: wheelSpin 1.15s cubic-bezier(0.22, 0.8, 0.28, 1) forwards;
+}
+
 * {
   -webkit-tap-highlight-color: transparent;
 }
