@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Calendar, Gift, ChevronLeft, Plus, Trash2, Loader2, PartyPopper, Heart, Lock, Globe } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, ShoppingListItem, Product, formatDate, daysUntil, formatPrice } from '../lib/types'
+import { ClosePerson, Occasion, ShoppingListItem, Product, formatDate, formatMonthDay, daysUntil, formatPrice } from '../lib/types'
+import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 import BottomNav from '../components/BottomNav'
@@ -29,59 +30,88 @@ export default function PersonDetailPage() {
 
   const fetchData = async () => {
     setLoading(true)
-    const { data: personData } = await supabase
-      .from('close_people')
-      .select('*')
-      .eq('id', id!)
-      .maybeSingle()
-    const personRec = personData as ClosePerson | null
-    setPerson(personRec)
-
-    const { data: occasionsData } = await supabase
-      .from('occasions')
-      .select('*')
-      .eq('person_id', id!)
-      .order('occasion_date', { ascending: true })
-    setOccasions(occasionsData || [])
-
-    const { data: shoppingData } = await supabase
-      .from('shopping_list_items')
-      .select('*, product:products(*)')
-      .eq('receiver_id', id!)
-      .order('created_at', { ascending: false })
-    setShoppingItems(shoppingData || [])
-
-    if (personRec?.linked_user_id) {
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('name, avatar_url, birth_date')
-        .eq('id', personRec.linked_user_id)
-        .maybeSingle()
-      setLinkedProfile(profileData as typeof linkedProfile)
-
-      const { data: wishData } = await supabase
-        .from('wishlist_items')
-        .select('*, product:products(*)')
-        .eq('owner_user_id', personRec.linked_user_id)
-        .in('visibility', ['public', 'private'])
-        .order('created_at', { ascending: false })
-      setWishlistItems((wishData || []) as unknown as { product: Product | null; visibility: string }[])
-    } else {
+    const applyLocal = () => {
+      const personRec = getAllLocalPeople().find(p => p.id === id!) || null
+      setPerson(personRec)
+      setOccasions(getLocalOccasions(id!))
+      setShoppingItems([])
       setLinkedProfile(null)
       setWishlistItems([])
     }
+    if (user!.id.startsWith('local-')) {
+      applyLocal()
+      setLoading(false)
+      return
+    }
+    try {
+      const { data: personData } = await supabase
+        .from('close_people')
+        .select('*')
+        .eq('id', id!)
+        .maybeSingle()
+      const personRec = personData as ClosePerson | null
+      setPerson(personRec)
 
-    setLoading(false)
+      const { data: occasionsData } = await supabase
+        .from('occasions')
+        .select('*')
+        .eq('person_id', id!)
+        .order('occasion_date', { ascending: true })
+      setOccasions(occasionsData || [])
+
+      const { data: shoppingData } = await supabase
+        .from('shopping_list_items')
+        .select('*, product:products(*)')
+        .eq('receiver_id', id!)
+        .order('created_at', { ascending: false })
+      setShoppingItems(shoppingData || [])
+
+      if (personRec?.linked_user_id) {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('name, avatar_url, birth_date')
+          .eq('id', personRec.linked_user_id)
+          .maybeSingle()
+        setLinkedProfile(profileData as typeof linkedProfile)
+
+        const { data: wishData } = await supabase
+          .from('wishlist_items')
+          .select('*, product:products(*)')
+          .eq('owner_user_id', personRec.linked_user_id)
+          .in('visibility', ['public', 'private'])
+          .order('created_at', { ascending: false })
+        setWishlistItems((wishData || []) as unknown as { product: Product | null; visibility: string }[])
+      } else {
+        setLinkedProfile(null)
+        setWishlistItems([])
+      }
+    } catch {
+      applyLocal()
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleAddOccasion = async () => {
     if (!occTitle.trim() || !occDate) return
-    await supabase.from('occasions').insert({
+    createLocalOccasion({
       person_id: id!,
       title: occTitle.trim(),
       occasion_date: occDate,
       source: 'manual',
     })
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('occasions').insert({
+          person_id: id!,
+          title: occTitle.trim(),
+          occasion_date: occDate,
+          source: 'manual',
+        })
+      } catch {
+        // local fallback
+      }
+    }
     setOccTitle('')
     setOccDate('')
     setShowAddOccasion(false)
@@ -89,7 +119,14 @@ export default function PersonDetailPage() {
   }
 
   const handleDeleteOccasion = async (occId: string) => {
-    await supabase.from('occasions').delete().eq('id', occId)
+    deleteLocalOccasion(occId)
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('occasions').delete().eq('id', occId)
+      } catch {
+        // local fallback
+      }
+    }
     fetchData()
   }
 
@@ -135,7 +172,7 @@ export default function PersonDetailPage() {
               <h2 className="text-xl font-bold">{person.name}</h2>
               <p className="text-sm text-white/80">
                 {person.closeness === 'very_close' ? 'خیلی نزدیک' : person.closeness === 'close' ? 'نزدیک' : 'آشنا'}
-                {displayBirthDate && ` • متولد ${formatDate(displayBirthDate)}`}
+                {displayBirthDate && ` • متولد ${formatMonthDay(displayBirthDate)}`}
               </p>
             </div>
           </div>
@@ -209,7 +246,9 @@ export default function PersonDetailPage() {
                   }`}>
                     <div>
                       <p className="text-sm font-medium text-stone-800">{occ.title}</p>
-                      <p className="text-xs text-stone-500">{formatDate(occ.occasion_date)}</p>
+                      <p className="text-xs text-stone-500">
+                        {occ.source === 'birthday' ? formatMonthDay(occ.occasion_date) : formatDate(occ.occasion_date)}
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       {days >= 0 && days <= 30 && (

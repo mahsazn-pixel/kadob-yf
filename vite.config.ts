@@ -4,8 +4,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
+    host: '0.0.0.0',
     port: 3000,
-    allowedHosts: true,
+    strictPort: true,
+    allowedHosts: ['.monkeycode-ai.live'],
+    hmr: {
+      protocol: 'wss',
+      clientPort: 443,
+    },
   },
 })

@@ -2,13 +2,12 @@ import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { User, LogOut, ShoppingBag, Heart, Edit2, Loader2, Camera, Cake } from 'lucide-react'
 import { useAuth } from '../lib/auth'
-import { supabase } from '../lib/supabase'
-import { formatDate } from '../lib/types'
+import { formatMonthDay } from '../lib/types'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 
 export default function ProfilePage() {
-  const { profile, user, signOut, refreshProfile } = useAuth()
+  const { profile, user, signOut, updateProfile } = useAuth()
   const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(profile?.name || '')
@@ -30,10 +29,12 @@ export default function ProfilePage() {
 
   const handleSave = async () => {
     setSaving(true)
-    await supabase.from('profiles').update({ name, updated_at: new Date().toISOString() }).eq('id', user!.id)
-    await refreshProfile()
-    setEditing(false)
-    setSaving(false)
+    try {
+      await updateProfile({ name: name.trim() || null })
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSignOut = async () => {
@@ -53,10 +54,12 @@ export default function ProfilePage() {
     now.setHours(0, 0, 0, 0)
     const yearToUse = candidate < now ? thisYear + 1 : thisYear
     const newDate = `${yearToUse}-${birthMonth.padStart(2, '0')}-${birthDay.padStart(2, '0')}`
-    await supabase.from('profiles').update({ birth_date: newDate, updated_at: new Date().toISOString() }).eq('id', user.id)
-    await refreshProfile()
-    setEditingBirthday(false)
-    setSavingBirthday(false)
+    try {
+      await updateProfile({ birth_date: newDate })
+      setEditingBirthday(false)
+    } finally {
+      setSavingBirthday(false)
+    }
   }
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -64,12 +67,13 @@ export default function ProfilePage() {
     if (!file || !user) return
     setUploading(true)
     try {
-      const ext = file.name.split('.').pop() || 'jpg'
-      const path = `${user.id}/avatar.${ext}`
-      await supabase.storage.from('avatars').upload(path, file, { upsert: true })
-      const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(path)
-      await supabase.from('profiles').update({ avatar_url: urlData.publicUrl, updated_at: new Date().toISOString() }).eq('id', user.id)
-      await refreshProfile()
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ''))
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(file)
+      })
+      await updateProfile({ avatar_url: dataUrl })
     } catch (err) {
       console.error('Avatar upload error:', err)
     }
@@ -188,7 +192,7 @@ export default function ProfilePage() {
             <div className="flex items-center justify-between border-t border-stone-100 pt-3 mt-2">
               <div className="flex items-center gap-1.5 text-sm text-stone-600">
                 <Cake size={16} className="text-primary-500" />
-                {profile?.birth_date ? formatDate(profile.birth_date) : 'تاریخ تولد ثبت نشده'}
+                {profile?.birth_date ? formatMonthDay(profile.birth_date) : 'تاریخ تولد ثبت نشده'}
               </div>
               <button
                 onClick={() => setEditingBirthday(true)}

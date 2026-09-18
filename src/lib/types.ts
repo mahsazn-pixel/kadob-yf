@@ -27,10 +27,26 @@ export interface Occasion {
   person_id: string
   title: string
   occasion_date: string
+  repeats_yearly: boolean
   source: string
   created_at: string
   updated_at: string
 }
+
+export const PERSIAN_MONTHS = [
+  { value: '01', label: 'فروردین' },
+  { value: '02', label: 'اردیبهشت' },
+  { value: '03', label: 'خرداد' },
+  { value: '04', label: 'تیر' },
+  { value: '05', label: 'مرداد' },
+  { value: '06', label: 'شهریور' },
+  { value: '07', label: 'مهر' },
+  { value: '08', label: 'آبان' },
+  { value: '09', label: 'آذر' },
+  { value: '10', label: 'دی' },
+  { value: '11', label: 'بهمن' },
+  { value: '12', label: 'اسفند' },
+]
 
 export interface Product {
   id: string
@@ -145,19 +161,76 @@ export function formatPrice(amount: number): string {
   return new Intl.NumberFormat('fa-IR').format(amount) + ' تومان'
 }
 
-export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr)
-  return new Intl.DateTimeFormat('fa-IR', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(date)
+export function pad2(value: string | number): string {
+  return String(value).padStart(2, '0')
 }
 
-export function daysUntil(dateStr: string): number {
-  const target = new Date(dateStr)
+export function parseMonthDay(dateStr: string): { month: string; day: string } {
+  const parts = dateStr.split('-')
+  if (parts.length >= 3) return { month: pad2(parts[1]), day: pad2(parts[2].slice(0, 2)) }
+  if (parts.length === 2) return { month: pad2(parts[0]), day: pad2(parts[1].slice(0, 2)) }
+  const date = new Date(dateStr)
+  return { month: pad2(date.getMonth() + 1), day: pad2(date.getDate()) }
+}
+
+export function toMonthDay(month: string | number, day: string | number): string {
+  return `${pad2(month)}-${pad2(day)}`
+}
+
+export function isRepeating(occ: { repeats_yearly?: boolean; source?: string }): boolean {
+  if (typeof occ.repeats_yearly === 'boolean') return occ.repeats_yearly
+  return occ.source === 'birthday'
+}
+
+export function formatDate(dateStr: string): string {
+  return formatMonthDay(dateStr)
+}
+
+export function formatMonthDay(dateStr: string): string {
+  const { month, day } = parseMonthDay(dateStr)
+  const monthLabel = PERSIAN_MONTHS.find(m => m.value === month)?.label || month
+  return `${Number(day)} ${monthLabel}`
+}
+
+export function formatOccasionDate(occ: { occasion_date: string; repeats_yearly?: boolean; source?: string }): string {
+  const dateLabel = formatMonthDay(occ.occasion_date)
+  return isRepeating(occ) ? `${dateLabel} • هر سال` : dateLabel
+}
+
+export function formatRemainingTime(days: number): string {
+  if (days === 0) return 'امروز'
+  if (days === 1) return 'فردا'
+  if (days === -1) return 'دیروز'
+  if (days > 1) return `${days} روز دیگر`
+  return `${Math.abs(days)} روز پیش`
+}
+
+export function nextOccasionDate(dateStr: string, repeatsYearly = true): Date {
+  const { month, day } = parseMonthDay(dateStr)
   const now = new Date()
   now.setHours(0, 0, 0, 0)
+  const target = new Date(now.getFullYear(), Number(month) - 1, Number(day))
   target.setHours(0, 0, 0, 0)
+  const diff = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+  if (diff < -1 && repeatsYearly) {
+    target.setFullYear(now.getFullYear() + 1)
+  }
+  return target
+}
+
+export function daysUntil(dateStr: string, repeatsYearly = true): number {
+  const target = nextOccasionDate(dateStr, repeatsYearly)
+  const now = new Date()
+  now.setHours(0, 0, 0, 0)
   return Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+export function daysUntilOccasion(occ: { occasion_date: string; repeats_yearly?: boolean; source?: string }): number {
+  return daysUntil(occ.occasion_date, isRepeating(occ))
+}
+
+export function isUpcomingOccasion(occ: { occasion_date: string; repeats_yearly?: boolean; source?: string }): boolean {
+  const days = daysUntilOccasion(occ)
+  if (days >= -1) return true
+  return false
 }

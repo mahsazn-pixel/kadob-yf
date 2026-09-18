@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { Gift, Calendar, ChevronLeft, Sparkles, Bell, ShoppingBag } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
-import { ClosePerson, Occasion, ShoppingListItem, formatPrice, formatDate, daysUntil } from '../lib/types'
+import { ClosePerson, Occasion, ShoppingListItem, daysUntil, formatRemainingTime } from '../lib/types'
+import { getLocalPeople, getUpcomingLocalOccasions } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 
 export default function HomePage() {
   const { profile, user } = useAuth()
-  const navigate = useNavigate()
   const [occasions, setOccasions] = useState<(Occasion & { person_name?: string })[]>([])
   const [people, setPeople] = useState<ClosePerson[]>([])
   const [shoppingItems, setShoppingItems] = useState<ShoppingListItem[]>([])
@@ -21,6 +21,21 @@ export default function HomePage() {
 
   const fetchHomeData = async () => {
     setLoading(true)
+    const applyLocal = () => {
+      const localPeople = getLocalPeople(user!.id)
+      setPeople(localPeople)
+      const upcoming = getUpcomingLocalOccasions(user!.id)
+        .filter(o => daysUntil(o.occasion_date) >= -1)
+        .sort((a, b) => daysUntil(a.occasion_date) - daysUntil(b.occasion_date))
+        .slice(0, 3)
+      setOccasions(upcoming)
+      setShoppingItems([])
+    }
+    if (user!.id.startsWith('local-')) {
+      applyLocal()
+      setLoading(false)
+      return
+    }
     try {
       const { data: peopleData } = await supabase
         .from('close_people')
@@ -56,6 +71,8 @@ export default function HomePage() {
         .order('created_at', { ascending: false })
         .limit(5)
       setShoppingItems(shoppingData || [])
+    } catch {
+      applyLocal()
     } finally {
       setLoading(false)
     }
@@ -114,7 +131,7 @@ export default function HomePage() {
             </div>
           ) : occasions.length === 0 ? (
             <div className="bg-white rounded-2xl p-5 text-center border border-stone-100">
-              <p className="text-sm text-stone-500 mb-3">هنوز مناسبتی ثبت نشده</p>
+              <p className="text-sm text-stone-500 mb-3">هنوز هیچ مناسبتی وارد نشده</p>
               <Link to="/people" className="inline-block text-sm text-primary-600 font-medium hover:underline">
                 افزودن مناسبت
               </Link>
@@ -123,9 +140,6 @@ export default function HomePage() {
             <div className="space-y-2">
               {occasions.map(occ => {
                 const days = daysUntil(occ.occasion_date)
-                const isToday = days === 0
-                const isTomorrow = days === 1
-                const isYesterday = days === -1
                 const inWindow = days >= -1 && days <= 1
                 return (
                   <Link
@@ -142,22 +156,10 @@ export default function HomePage() {
                         }`}>
                           <Gift size={18} className={inWindow ? 'text-white' : 'text-stone-400'} />
                         </div>
-                        <div>
-                          <p className="font-semibold text-stone-800 text-sm">{occ.title}</p>
-                          <p className="text-xs text-stone-500">
-                            {occ.person_name} • {formatDate(occ.occasion_date)}
-                          </p>
-                        </div>
+                        <p className="font-semibold text-stone-800 text-sm">
+                          {occ.title} {occ.person_name} • {formatRemainingTime(days)}
+                        </p>
                       </div>
-                      {isToday && (
-                        <span className="text-xs font-bold text-white bg-error-500 px-2 py-1 rounded-lg">امروز!</span>
-                      )}
-                      {isTomorrow && (
-                        <span className="text-xs font-bold text-white bg-error-500 px-2 py-1 rounded-lg">فردا</span>
-                      )}
-                      {days > 1 && (
-                        <span className="text-xs text-stone-400">{days} روز دیگر</span>
-                      )}
                     </div>
                     {inWindow && (
                       <button className="w-full mt-2.5 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium hover:bg-primary-600 transition-colors">

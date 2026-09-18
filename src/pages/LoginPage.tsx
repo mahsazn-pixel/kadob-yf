@@ -2,23 +2,20 @@ import { useState, useRef, useEffect } from 'react'
 import { Gift, Phone, ShieldCheck, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase } from '../lib/supabase'
 
 type Step = 'phone' | 'otp' | 'success'
 type Mode = 'login' | 'signup'
 
 export default function LoginPage() {
-  const { session } = useAuth()
+  const { session, signInLocal } = useAuth()
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('phone')
   const [mode, setMode] = useState<Mode>('login')
   const [phone, setPhone] = useState('')
   const [otp, setOtp] = useState(['', '', '', '', '', ''])
-  const [otpRequestId, setOtpRequestId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [countdown, setCountdown] = useState(0)
-  const [devCode, setDevCode] = useState('')
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
@@ -39,26 +36,10 @@ export default function LoginPage() {
       return
     }
     setLoading(true)
-    try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/otp-request`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      })
-      const data = await res.json()
-      if (!data.success) {
-        setError(data.error?.message || 'خطا در ارسال کد')
-        return
-      }
-      setOtpRequestId(data.data.otp_request_id)
-      if (data.data.dev_code) setDevCode(data.data.dev_code)
-      setStep('otp')
-      setCountdown(60)
-    } catch {
-      setError('خطا در ارتباط با سرور')
-    } finally {
-      setLoading(false)
-    }
+    await new Promise(resolve => setTimeout(resolve, 400))
+    setStep('otp')
+    setCountdown(60)
+    setLoading(false)
   }
 
   const handleOtpChange = (index: number, value: string) => {
@@ -74,31 +55,16 @@ export default function LoginPage() {
 
   const handleOtpVerify = async (code: string) => {
     setError('')
-    setLoading(true)
-    try {
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/otp-verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, otp: code, otp_request_id: otpRequestId }),
-      })
-      const data = await res.json()
-      if (!data.success) {
-        setError(data.error?.message || 'کد اشتباه است')
-        setOtp(['', '', '', '', '', ''])
-        otpRefs.current[0]?.focus()
-        return
-      }
-      await supabase.auth.setSession({
-        access_token: data.data.access_token,
-        refresh_token: data.data.refresh_token,
-      })
-      setStep('success')
-      setTimeout(() => navigate('/'), 1000)
-    } catch {
-      setError('خطا در ارتباط با سرور')
-    } finally {
-      setLoading(false)
+    if (code.length !== 6) {
+      setError('کد ۶ رقمی را وارد کنید')
+      return
     }
+    setLoading(true)
+    await new Promise(resolve => setTimeout(resolve, 400))
+    signInLocal(phone)
+    setStep('success')
+    setLoading(false)
+    setTimeout(() => navigate('/'), 800)
   }
 
   const resendOtp = async () => {
@@ -185,11 +151,6 @@ export default function LoginPage() {
                 <p className="text-sm text-stone-600">کد ۶ رقمی ارسال شده به</p>
               </div>
               <p className="text-base font-semibold text-stone-800 mb-4" dir="ltr">{phone}</p>
-              {devCode && (
-                <div className="mb-4 px-3 py-2 rounded-lg bg-warning-50 border border-warning-200 text-warning-700 text-sm text-center">
-                  کد آزمایشی: <span className="font-bold tracking-widest" dir="ltr">{devCode}</span>
-                </div>
-              )}
               <div className="flex gap-2 justify-between" dir="ltr">
                 {otp.map((digit, i) => (
                   <input
