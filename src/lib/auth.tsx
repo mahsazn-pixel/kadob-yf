@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { Session, User } from '@supabase/supabase-js'
 import { supabase } from './supabase'
-import { getLocalProfile, saveLocalProfile } from './localStore'
+import { getLocalProfile, saveLocalProfile, seedDemoUser } from './localStore'
 import { Profile } from './types'
 
 interface AuthContextType {
@@ -89,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!cancelled) setLoading(false)
     }, 5000)
 
+    seedDemoUser()
     const stored = localStorage.getItem(LOCAL_AUTH_KEY)
     if (stored) {
       try {

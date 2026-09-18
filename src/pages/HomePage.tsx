@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Gift, Calendar, ChevronLeft, Sparkles, Bell, ShoppingBag } from 'lucide-react'
+import { Gift, Calendar, ChevronLeft, Sparkles, Bell, ShoppingBag, PartyPopper } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
-import { ClosePerson, Occasion, ShoppingListItem, daysUntil, formatRemainingTime } from '../lib/types'
-import { getLocalPeople, getUpcomingLocalOccasions } from '../lib/localStore'
+import { ClosePerson, Occasion, ShoppingListItem, daysUntilOccasion, formatRemainingTime, sortPeopleByNearestOccasion } from '../lib/types'
+import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson } from '../lib/localStore'
+import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
 
 export default function HomePage() {
@@ -13,6 +14,7 @@ export default function HomePage() {
   const [people, setPeople] = useState<ClosePerson[]>([])
   const [shoppingItems, setShoppingItems] = useState<ShoppingListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [greetingTarget, setGreetingTarget] = useState<{ person: ClosePerson; occasionId: string; occasionTitle: string } | null>(null)
 
   useEffect(() => {
     if (!user) return
@@ -22,14 +24,16 @@ export default function HomePage() {
   const fetchHomeData = async () => {
     setLoading(true)
     const applyLocal = () => {
+      ensureDemoClosePerson(user!.id)
       const localPeople = getLocalPeople(user!.id)
-      setPeople(localPeople)
-      const upcoming = getUpcomingLocalOccasions(user!.id)
-        .filter(o => daysUntil(o.occasion_date) >= -1)
-        .sort((a, b) => daysUntil(a.occasion_date) - daysUntil(b.occasion_date))
+      const allOcc = getUpcomingLocalOccasions(user!.id)
+      setPeople(sortPeopleByNearestOccasion(localPeople, allOcc))
+      const upcoming = allOcc
+        .filter(o => daysUntilOccasion(o) >= -1)
+        .sort((a, b) => daysUntilOccasion(a) - daysUntilOccasion(b))
         .slice(0, 3)
       setOccasions(upcoming)
-      setShoppingItems([])
+      setShoppingItems(getLocalShoppingItems(user!.id).slice(0, 5))
     }
     if (user!.id.startsWith('local-')) {
       applyLocal()
@@ -41,27 +45,29 @@ export default function HomePage() {
         .from('close_people')
         .select('*')
         .order('created_at', { ascending: false })
-      setPeople(peopleData || [])
+      const peopleList = peopleData || []
 
-      if (peopleData && peopleData.length > 0) {
-        const personIds = peopleData.map(p => p.id)
+      if (peopleList.length > 0) {
+        const personIds = peopleList.map(p => p.id)
         const { data: occasionsData } = await supabase
           .from('occasions')
           .select('*')
           .in('person_id', personIds)
           .order('occasion_date', { ascending: true })
-          .limit(10)
 
         const occasionsWithNames = (occasionsData || []).map(o => {
-          const person = peopleData.find(p => p.id === o.person_id)
+          const person = peopleList.find(p => p.id === o.person_id)
           return { ...o, person_name: person?.name }
         })
 
+        setPeople(sortPeopleByNearestOccasion(peopleList, occasionsWithNames))
         const upcoming = occasionsWithNames
-          .filter(o => daysUntil(o.occasion_date) >= -1)
-          .sort((a, b) => daysUntil(a.occasion_date) - daysUntil(b.occasion_date))
+          .filter(o => daysUntilOccasion(o) >= -1)
+          .sort((a, b) => daysUntilOccasion(a) - daysUntilOccasion(b))
           .slice(0, 3)
         setOccasions(upcoming)
+      } else {
+        setPeople([])
       }
 
       const { data: shoppingData } = await supabase
@@ -139,34 +145,47 @@ export default function HomePage() {
           ) : (
             <div className="space-y-2">
               {occasions.map(occ => {
-                const days = daysUntil(occ.occasion_date)
+                const days = daysUntilOccasion(occ)
                 const inWindow = days >= -1 && days <= 1
+                const giftHref = `/discover?person=${occ.person_id}&occasion=${occ.id}`
                 return (
-                  <Link
+                  <div
                     key={occ.id}
-                    to={`/discover?person=${occ.person_id}&occasion=${occ.id}`}
-                    className={`block bg-white rounded-xl p-3.5 border transition-all hover:shadow-md ${
+                    className={`bg-white rounded-xl p-3.5 border ${
                       inWindow ? 'border-primary-300 bg-primary-50' : 'border-stone-100'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                          inWindow ? 'bg-primary-500' : 'bg-stone-100'
-                        }`}>
-                          <Gift size={18} className={inWindow ? 'text-white' : 'text-stone-400'} />
-                        </div>
-                        <p className="font-semibold text-stone-800 text-sm">
-                          {occ.title} {occ.person_name} • {formatRemainingTime(days)}
-                        </p>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
+                        inWindow ? 'bg-primary-500' : 'bg-stone-100'
+                      }`}>
+                        <Gift size={18} className={inWindow ? 'text-white' : 'text-stone-400'} />
                       </div>
+                      <p className="font-semibold text-stone-800 text-sm">
+                        {occ.title} {occ.person_name} • {formatRemainingTime(days)}
+                      </p>
                     </div>
-                    {inWindow && (
-                      <button className="w-full mt-2.5 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium hover:bg-primary-600 transition-colors">
-                        تبریک بگو — هدیه بگیر
-                      </button>
-                    )}
-                  </Link>
+                    <div className="flex gap-2 mt-2.5">
+                      {inWindow && (
+                        <button
+                          onClick={() => {
+                            const person = people.find(p => p.id === occ.person_id)
+                            if (!person) return
+                            setGreetingTarget({ person, occasionId: occ.id, occasionTitle: occ.title })
+                          }}
+                          className="flex-1 py-2 rounded-lg bg-error-500 text-white text-sm font-medium hover:bg-error-600 transition-colors flex items-center justify-center gap-1.5"
+                        >
+                          <PartyPopper size={16} /> تبریک بگو
+                        </button>
+                      )}
+                      <Link
+                        to={giftHref}
+                        className="flex-1 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium hover:bg-primary-600 transition-colors flex items-center justify-center gap-1.5"
+                      >
+                        <Gift size={16} /> هدیه بگیر
+                      </Link>
+                    </div>
+                  </div>
                 )
               })}
             </div>
@@ -239,6 +258,15 @@ export default function HomePage() {
           </section>
         )}
       </div>
+
+      {greetingTarget && (
+        <GreetingModal
+          person={greetingTarget.person}
+          occasionId={greetingTarget.occasionId}
+          occasionTitle={greetingTarget.occasionTitle}
+          onClose={() => setGreetingTarget(null)}
+        />
+      )}
 
       <BottomNav />
     </div>

@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { User, LogOut, ShoppingBag, Heart, Edit2, Loader2, Camera, Cake } from 'lucide-react'
+import { User, LogOut, ShoppingBag, Heart, Edit2, Loader2, Camera, Cake, Calendar, PartyPopper } from 'lucide-react'
 import { useAuth } from '../lib/auth'
-import { formatMonthDay } from '../lib/types'
+import { formatMonthDay, Greeting } from '../lib/types'
+import { getLocalGreetingsForReceiver } from '../lib/localStore'
+import { supabase } from '../lib/supabase'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 
@@ -17,6 +19,7 @@ export default function ProfilePage() {
   const [birthMonth, setBirthMonth] = useState('')
   const [birthDay, setBirthDay] = useState('')
   const [savingBirthday, setSavingBirthday] = useState(false)
+  const [approvedGreetings, setApprovedGreetings] = useState<Greeting[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -26,6 +29,28 @@ export default function ProfilePage() {
       setBirthDay(String(d.getDate()).padStart(2, '0'))
     }
   }, [profile?.birth_date])
+
+  useEffect(() => {
+    if (!user) return
+    const local = getLocalGreetingsForReceiver(user.id, ['approved'])
+    if (user.id.startsWith('local-')) {
+      setApprovedGreetings(local)
+      return
+    }
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('greetings')
+          .select('*')
+          .eq('receiver_user_id', user.id)
+          .eq('status', 'approved')
+          .order('created_at', { ascending: false })
+        setApprovedGreetings(data && data.length > 0 ? data : local)
+      } catch {
+        setApprovedGreetings(local)
+      }
+    })()
+  }, [user])
 
   const handleSave = async () => {
     setSaving(true)
@@ -204,6 +229,24 @@ export default function ProfilePage() {
           )}
         </div>
 
+        {approvedGreetings.length > 0 && (
+          <div className="mb-4">
+            <h3 className="font-bold text-stone-800 mb-2 flex items-center gap-2">
+              <PartyPopper size={16} className="text-error-500" />
+              تبریک‌های تأییدشده
+            </h3>
+            <div className="space-y-2">
+              {approvedGreetings.map(item => (
+                <div key={item.id} className="bg-white rounded-2xl border border-stone-100 p-3.5">
+                  <p className="text-sm font-semibold text-stone-800">{item.sender_name}</p>
+                  {item.occasion_title && <p className="text-xs text-stone-400 mt-0.5">{item.occasion_title}</p>}
+                  <p className="text-sm text-stone-600 mt-1.5 leading-6">{item.message}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-2">
           <button
             onClick={() => navigate('/shopping-list')}
@@ -223,6 +266,26 @@ export default function ProfilePage() {
               <Heart size={20} className="text-primary-600" />
             </div>
             <span className="flex-1 text-right font-medium text-stone-700">لیست آرزوها</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/my-occasions')}
+            className="w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-stone-100 hover:shadow-md transition-all"
+          >
+            <div className="w-10 h-10 rounded-lg bg-secondary-50 flex items-center justify-center">
+              <Calendar size={20} className="text-secondary-600" />
+            </div>
+            <span className="flex-1 text-right font-medium text-stone-700">مناسبت‌های من</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/greetings')}
+            className="w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-stone-100 hover:shadow-md transition-all"
+          >
+            <div className="w-10 h-10 rounded-lg bg-error-50 flex items-center justify-center">
+              <PartyPopper size={20} className="text-error-600" />
+            </div>
+            <span className="flex-1 text-right font-medium text-stone-700">پیام‌های تبریک</span>
           </button>
         </div>
 

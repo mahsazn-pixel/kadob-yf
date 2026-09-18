@@ -27,8 +27,37 @@ export interface Occasion {
   person_id: string
   title: string
   occasion_date: string
-  repeats_yearly: boolean
+  repeats_yearly?: boolean
   source: string
+  created_at: string
+  updated_at: string
+}
+
+export type GreetingStatus = 'pending' | 'approved' | 'rejected'
+
+export interface Greeting {
+  id: string
+  sender_user_id: string
+  sender_name: string
+  receiver_person_id: string
+  receiver_user_id: string | null
+  occasion_id: string | null
+  occasion_title: string | null
+  message: string
+  status: GreetingStatus
+  created_at: string
+  updated_at: string
+}
+
+export type MyOccasionVisibility = 'public' | 'very_close'
+
+export interface MyOccasion {
+  id: string
+  owner_user_id: string
+  title: string
+  occasion_date: string
+  repeats_yearly: boolean
+  visibility: MyOccasionVisibility
   created_at: string
   updated_at: string
 }
@@ -177,6 +206,11 @@ export function toMonthDay(month: string | number, day: string | number): string
   return `${pad2(month)}-${pad2(day)}`
 }
 
+export function composeOccasionDate(month: string | number, day: string | number): string {
+  const year = new Date().getFullYear()
+  return `${year}-${pad2(month)}-${pad2(day)}`
+}
+
 export function isRepeating(occ: { repeats_yearly?: boolean; source?: string }): boolean {
   if (typeof occ.repeats_yearly === 'boolean') return occ.repeats_yearly
   return occ.source === 'birthday'
@@ -233,4 +267,33 @@ export function isUpcomingOccasion(occ: { occasion_date: string; repeats_yearly?
   const days = daysUntilOccasion(occ)
   if (days >= -1) return true
   return false
+}
+
+export function nearestUpcomingDays(occasions: { occasion_date: string; repeats_yearly?: boolean; source?: string }[]): number | null {
+  const days = occasions.map(daysUntilOccasion).filter(d => d >= -1)
+  if (days.length === 0) return null
+  return Math.min(...days)
+}
+
+export function sortPeopleByNearestOccasion<T extends { id: string; name: string }>(
+  people: T[],
+  occasions: { person_id: string; occasion_date: string; repeats_yearly?: boolean; source?: string }[],
+): T[] {
+  const grouped = new Map<string, typeof occasions>()
+  for (const occ of occasions) {
+    const list = grouped.get(occ.person_id) || []
+    list.push(occ)
+    grouped.set(occ.person_id, list)
+  }
+  return [...people].sort((a, b) => {
+    const aSelf = a.name === 'خودم'
+    const bSelf = b.name === 'خودم'
+    if (aSelf !== bSelf) return aSelf ? -1 : 1
+    const aDays = nearestUpcomingDays(grouped.get(a.id) || [])
+    const bDays = nearestUpcomingDays(grouped.get(b.id) || [])
+    if (aDays === null && bDays === null) return 0
+    if (aDays === null) return 1
+    if (bDays === null) return -1
+    return aDays - bDays
+  })
 }

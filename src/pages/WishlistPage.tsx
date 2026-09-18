@@ -3,6 +3,8 @@ import { Heart, Loader2, Trash2, Search, X, Eye, EyeOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { WishlistItem, Product, formatPrice } from '../lib/types'
+import { getLocalWishlist, addLocalWishlistItem } from '../lib/localStore'
+import { LOCAL_PRODUCTS } from '../lib/catalog'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -22,32 +24,63 @@ export default function WishlistPage() {
 
   const fetchItems = async () => {
     setLoading(true)
-    const { data } = await supabase
-      .from('wishlist_items')
-      .select('*, product:products(*)')
-      .eq('owner_user_id', user!.id)
-      .order('created_at', { ascending: false })
-    setItems(data || [])
-    setLoading(false)
+    const local = getLocalWishlist(user!.id)
+    if (user!.id.startsWith('local-')) {
+      setItems(local)
+      setLoading(false)
+      return
+    }
+    try {
+      const { data } = await supabase
+        .from('wishlist_items')
+        .select('*, product:products(*)')
+        .eq('owner_user_id', user!.id)
+        .order('created_at', { ascending: false })
+      setItems(data && data.length > 0 ? data : local)
+    } catch {
+      setItems(local)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
     setSearching(true)
-    const { data } = await supabase
-      .from('products')
-      .select('*')
-      .ilike('title', `%${searchQuery}%`)
-      .limit(20)
-    setProducts(data || [])
-    setSearching(false)
+    const q = searchQuery.trim()
+    const localMatches = LOCAL_PRODUCTS.filter(p => p.title.includes(q)).slice(0, 20)
+    if (user!.id.startsWith('local-')) {
+      setProducts(localMatches)
+      setSearching(false)
+      return
+    }
+    try {
+      const { data } = await supabase
+        .from('products')
+        .select('*')
+        .ilike('title', `%${q}%`)
+        .limit(20)
+      setProducts(data && data.length > 0 ? data : localMatches)
+    } catch {
+      setProducts(localMatches)
+    } finally {
+      setSearching(false)
+    }
   }
 
   const addToWishlist = async (product: Product) => {
-    await supabase.from('wishlist_items').insert({
-      owner_user_id: user!.id,
-      product_id: product.id,
-    })
+    if (user!.id.startsWith('local-')) {
+      addLocalWishlistItem(user!.id, product.id)
+    } else {
+      try {
+        await supabase.from('wishlist_items').insert({
+          owner_user_id: user!.id,
+          product_id: product.id,
+        })
+      } catch {
+        addLocalWishlistItem(user!.id, product.id)
+      }
+    }
     setShowSearch(false)
     setSearchQuery('')
     setProducts([])
@@ -140,10 +173,10 @@ export default function WishlistPage() {
       </div>
 
       {showSearch && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center" onClick={() => setShowSearch(false)}>
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 flex items-end justify-center" onClick={() => setShowSearch(false)}>
           <div className="absolute inset-0 bg-black/40 animate-fade-in" />
           <div
-            className="relative bg-white w-full max-w-md rounded-t-3xl p-5 animate-slide-up max-h-[80vh] overflow-y-auto"
+            className="relative bg-white w-full rounded-t-3xl p-5 animate-slide-up max-h-[80vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">

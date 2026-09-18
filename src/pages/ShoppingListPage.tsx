@@ -4,6 +4,7 @@ import { ShoppingBag, Loader2, Check, Gift, X, ExternalLink } from 'lucide-react
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ShoppingListItem, formatPrice } from '../lib/types'
+import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -24,32 +25,56 @@ export default function ShoppingListPage() {
 
   const fetchItems = async () => {
     setLoading(true)
-    const { data } = await supabase
-      .from('shopping_list_items')
-      .select('*, product:products(*), receiver:close_people(*)')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
-    setItems(data || [])
-    setLoading(false)
+    const local = getLocalShoppingItems(user!.id)
+    if (user!.id.startsWith('local-')) {
+      setItems(local)
+      setLoading(false)
+      return
+    }
+    try {
+      const { data } = await supabase
+        .from('shopping_list_items')
+        .select('*, product:products(*), receiver:close_people(*)')
+        .eq('user_id', user!.id)
+        .order('created_at', { ascending: false })
+      setItems(data && data.length > 0 ? data : local)
+    } catch {
+      setItems(local)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const updateStatus = async (id: string, status: 'purchased' | 'gifted') => {
     setUpdating(id)
-    const updates: Record<string, unknown> = {
-      status,
-      updated_at: new Date().toISOString(),
-    }
+    const updates: Partial<{ status: string; purchased_at: string; gifted_at: string }> = { status }
     if (status === 'purchased') updates.purchased_at = new Date().toISOString()
     if (status === 'gifted') updates.gifted_at = new Date().toISOString()
-
-    await supabase.from('shopping_list_items').update(updates).eq('id', id)
+    updateLocalShoppingItem(id, updates)
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('shopping_list_items').update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        }).eq('id', id)
+      } catch {
+        // local fallback
+      }
+    }
     setUpdating(null)
     fetchItems()
   }
 
   const cancelReservation = async (id: string) => {
     setUpdating(id)
-    await supabase.from('shopping_list_items').delete().eq('id', id)
+    deleteLocalShoppingItem(id)
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('shopping_list_items').delete().eq('id', id)
+      } catch {
+        // local fallback
+      }
+    }
     setUpdating(null)
     fetchItems()
   }

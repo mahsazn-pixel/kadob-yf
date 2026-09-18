@@ -8,13 +8,16 @@ import DiscoveryPage from './pages/DiscoveryPage'
 import ShoppingListPage from './pages/ShoppingListPage'
 import WishlistPage from './pages/WishlistPage'
 import ProfilePage from './pages/ProfilePage'
+import MyOccasionsPage from './pages/MyOccasionsPage'
+import GreetingsPage from './pages/GreetingsPage'
+import InvitePage from './pages/InvitePage'
 import { Loader2 } from 'lucide-react'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { session, loading } = useAuth()
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-stone-50">
         <Loader2 size={32} className="animate-spin text-primary-500" />
       </div>
     )
@@ -27,6 +30,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/invite" element={<InvitePage />} />
       <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
       <Route path="/people" element={<ProtectedRoute><PeoplePage /></ProtectedRoute>} />
       <Route path="/people/:id" element={<ProtectedRoute><PersonDetailPage /></ProtectedRoute>} />
@@ -34,6 +38,8 @@ export default function App() {
       <Route path="/shopping-list" element={<ProtectedRoute><ShoppingListPage /></ProtectedRoute>} />
       <Route path="/wishlist" element={<ProtectedRoute><WishlistPage /></ProtectedRoute>} />
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+      <Route path="/my-occasions" element={<ProtectedRoute><MyOccasionsPage /></ProtectedRoute>} />
+      <Route path="/greetings" element={<ProtectedRoute><GreetingsPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

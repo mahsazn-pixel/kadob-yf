@@ -4,6 +4,8 @@ import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, C
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Product, ReactionType, REACTION_LABELS, formatPrice } from '../lib/types'
+import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem } from '../lib/localStore'
+import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import EmptyState from '../components/EmptyState'
@@ -51,27 +53,68 @@ export default function DiscoveryPage() {
   const [wishlisted, setWishlisted] = useState<Set<string>>(new Set())
   const [wishlistLoading, setWishlistLoading] = useState(false)
   const [toastMsg, setToastMsg] = useState('')
+  const [localDeck, setLocalDeck] = useState<Card[]>([])
+  const [localReactions, setLocalReactions] = useState<{ product_id: string; reaction: ReactionType }[]>([])
+  const isLocalUser = !!user?.id.startsWith('local-')
 
   useEffect(() => {
     if (!user) return
-    supabase
-      .from('close_people')
-      .select('*')
-      .eq('owner_user_id', user.id)
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        setPeople(data || [])
-        if (personId) {
-          setSelectedPerson(personId)
-          setStep('budget')
-        }
-      })
+    const applyPeople = (list: ClosePerson[]) => {
+      setPeople(list)
+      if (personId) {
+        setSelectedPerson(personId)
+        setStep('budget')
+      }
+    }
+    if (user.id.startsWith('local-')) {
+      applyPeople(getLocalPeople(user.id))
+      return
+    }
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('close_people')
+          .select('*')
+          .eq('owner_user_id', user.id)
+          .order('created_at', { ascending: false })
+        applyPeople(data && data.length > 0 ? data : getLocalPeople(user.id))
+      } catch {
+        applyPeople(getLocalPeople(user.id))
+      }
+    })()
   }, [user, personId])
+
+  const startLocalSession = () => {
+    const products = rankProductsForDiscovery(budgetMin, budgetMax, 20)
+    if (products.length === 0) {
+      setError('محصولی در این بازه قیمت پیدا نشد')
+      return false
+    }
+    const cards = products.map((product, idx) => productToCard(product, idx + 1))
+    setLocalDeck(cards)
+    setLocalReactions([])
+    setSession({
+      session_id: crypto.randomUUID(),
+      status: 'active',
+      max_cards: cards.length,
+      shown_cards: 0,
+      cards,
+    })
+    setCurrentCards(cards)
+    setCurrentIdx(0)
+    setStep('discovery')
+    return true
+  }
 
   const startSession = async () => {
     if (!selectedPerson) return
     setLoading(true)
     setError('')
+    if (isLocalUser) {
+      startLocalSession()
+      setLoading(false)
+      return
+    }
     try {
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discovery-session`, {
         method: 'POST',
@@ -88,25 +131,83 @@ export default function DiscoveryPage() {
       })
       const data = await res.json()
       if (!data.success) {
-        setError(data.error?.message || 'خطا در شروع جلسه')
+        startLocalSession()
+        setLoading(false)
+        return
+      }
+      const remoteCards = data.data.cards || []
+      if (remoteCards.length === 0) {
+        startLocalSession()
         setLoading(false)
         return
       }
       setSession(data.data)
-      setCurrentCards(data.data.cards || [])
+      setCurrentCards(remoteCards)
       setCurrentIdx(0)
       setStep('discovery')
     } catch {
-      setError('خطا در ارتباط با سرور')
+      startLocalSession()
     } finally {
       setLoading(false)
     }
+  }
+
+  const finishLocalReview = (reactions: { product_id: string; reaction: ReactionType }[]) => {
+    const liked = reactions.filter(r => r.reaction === 'good' || r.reaction === 'great')
+    if (liked.length === 0) {
+      setStep('failed')
+      return
+    }
+    const items: { product: Product; best_reaction: string; score: number }[] = []
+    for (const r of liked) {
+      const product = getCatalogProduct(r.product_id)
+      if (!product) continue
+      items.push({
+        product,
+        best_reaction: r.reaction,
+        score: r.reaction === 'great' ? 8 : 5,
+      })
+    }
+    items.sort((a, b) => b.score - a.score)
+    setReviewItems(items)
+    setStep('review')
+  }
+
+  const handleLocalReaction = (reaction: ReactionType, productId: string) => {
+    const nextReactions = [...localReactions, { product_id: productId, reaction }]
+    setLocalReactions(nextReactions)
+    if (reaction === 'the_one') {
+      const product = getCatalogProduct(productId)
+      if (user && selectedPerson) {
+        createLocalShoppingItem({
+          user_id: user.id,
+          receiver_id: selectedPerson,
+          product_id: productId,
+          session_id: session?.session_id,
+        })
+      }
+      setShopUrl(product?.shop_url || null)
+      setStep('success')
+      return
+    }
+    const nextIdx = currentIdx + 1
+    if (nextIdx >= localDeck.length) {
+      finishLocalReview(nextReactions)
+      return
+    }
+    setCurrentIdx(nextIdx)
   }
 
   const handleReaction = async (reaction: ReactionType) => {
     if (!session || currentIdx >= currentCards.length) return
     const card = currentCards[currentIdx]
     setLoading(true)
+
+    if (isLocalUser || localDeck.length > 0) {
+      handleLocalReaction(reaction, card.product_id)
+      setLoading(false)
+      return
+    }
 
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token
@@ -124,7 +225,7 @@ export default function DiscoveryPage() {
       })
       const data = await res.json()
       if (!data.success) {
-        setError(data.error?.message || 'خطا در ثبت واکنش')
+        handleLocalReaction(reaction, card.product_id)
         setLoading(false)
         return
       }
@@ -141,17 +242,14 @@ export default function DiscoveryPage() {
       } else if (result.next_card) {
         setCurrentCards(prev => [...prev, result.next_card])
         setCurrentIdx(prev => prev + 1)
+      } else if (currentIdx + 1 >= currentCards.length || currentIdx + 1 >= 20) {
+        await fetchReview()
+        setStep('review')
       } else {
-        // No more cards but still active — check if we've seen all
-        if (currentIdx + 1 >= 20) {
-          await fetchReview()
-          setStep('review')
-        } else {
-          setCurrentIdx(prev => prev + 1)
-        }
+        setCurrentIdx(prev => prev + 1)
       }
     } catch {
-      setError('خطا در ارتباط با سرور')
+      handleLocalReaction(reaction, card.product_id)
     } finally {
       setLoading(false)
     }
@@ -183,20 +281,34 @@ export default function DiscoveryPage() {
     setCurrentCards([])
     setCurrentIdx(0)
     setReviewItems([])
+    setLocalDeck([])
+    setLocalReactions([])
     setStep('budget')
   }
 
   const addToWishlist = async (productId: string) => {
     if (!user) return
     setWishlistLoading(true)
+    const markAdded = () => {
+      setWishlisted(prev => new Set(prev).add(productId))
+      setToastMsg('به لیست خواسته‌ها افزوده شد')
+      setTimeout(() => setToastMsg(''), 2500)
+    }
+    if (isLocalUser) {
+      addLocalWishlistItem(user.id, productId)
+      markAdded()
+      setWishlistLoading(false)
+      return
+    }
     try {
       const { error } = await supabase
         .from('wishlist_items')
         .insert({ owner_user_id: user.id, product_id: productId })
       if (!error) {
-        setWishlisted(prev => new Set(prev).add(productId))
-        setToastMsg('به لیست خواسته‌ها افزوده شد')
-        setTimeout(() => setToastMsg(''), 2500)
+        markAdded()
+      } else {
+        addLocalWishlistItem(user.id, productId)
+        markAdded()
       }
     } finally {
       setWishlistLoading(false)
@@ -206,6 +318,23 @@ export default function DiscoveryPage() {
   const handleReserveFromReview = async (productId: string) => {
     if (!session) return
     setLoading(true)
+    const finishLocal = () => {
+      if (user && selectedPerson) {
+        createLocalShoppingItem({
+          user_id: user.id,
+          receiver_id: selectedPerson,
+          product_id: productId,
+          session_id: session.session_id,
+        })
+      }
+      setShopUrl(getCatalogProduct(productId)?.shop_url || null)
+      setStep('success')
+    }
+    if (isLocalUser || localDeck.length > 0) {
+      finishLocal()
+      setLoading(false)
+      return
+    }
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discovery-reaction`, {
@@ -224,14 +353,19 @@ export default function DiscoveryPage() {
       if (data.success) {
         setShopUrl(data.data.shop_url)
         setStep('success')
+      } else {
+        finishLocal()
       }
+    } catch {
+      finishLocal()
     } finally {
       setLoading(false)
     }
   }
 
   const currentCard = currentCards[currentIdx]
-  const progress = session ? ((currentIdx) / 20) * 100 : 0
+  const totalCards = session?.max_cards || currentCards.length || 20
+  const progress = session ? (currentIdx / Math.max(totalCards, 1)) * 100 : 0
 
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
@@ -362,7 +496,7 @@ export default function DiscoveryPage() {
         <div className="flex flex-col items-center px-4 py-4 animate-fade-in">
           <div className="w-full max-w-sm mb-3">
             <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
-              <span>کارت {currentIdx + 1} از ۲۰</span>
+              <span>کارت {currentIdx + 1} از {totalCards}</span>
               <span>{Math.round(progress)}%</span>
             </div>
             <div className="h-1.5 rounded-full bg-stone-200 overflow-hidden">
@@ -552,8 +686,10 @@ export default function DiscoveryPage() {
       )}
 
       {toastMsg && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg animate-slide-up">
-          {toastMsg}
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 px-5 flex justify-center pointer-events-none">
+          <div className="px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg animate-slide-up">
+            {toastMsg}
+          </div>
         </div>
       )}
 

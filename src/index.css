@@ -38,11 +38,24 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+html, body, #root {
+  min-height: 100%;
+}
+
 body {
   font-family: 'Vazirmatn', system-ui, sans-serif;
-  background-color: #f9f9f9;
+  background-color: #ddd6cc;
   color: #2c1e16;
   overscroll-behavior: none;
+}
+
+#root {
+  max-width: 600px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background-color: #f9f9f9;
+  box-shadow: 0 0 48px rgba(44, 30, 22, 0.12);
+  position: relative;
 }
 
 button, a, input {

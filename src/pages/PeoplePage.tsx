@@ -3,20 +3,25 @@ import { Link } from 'react-router-dom'
 import { UserPlus, Users, X, Loader2, Trash2, Calendar, PartyPopper, Edit2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, formatDate, formatMonthDay, daysUntil } from '../lib/types'
+import { ClosePerson, Occasion, daysUntilOccasion, formatOccasionDate, parseMonthDay, composeOccasionDate, sortPeopleByNearestOccasion } from '../lib/types'
+import OccasionDateFields from '../components/OccasionDateFields'
 import {
   getLocalPeople,
   createLocalPerson,
   deleteLocalPerson,
   upsertLocalPerson,
   getLocalOccasions,
+  getAllLocalOccasions,
   createLocalOccasion,
   upsertLocalOccasion,
   deleteLocalOccasion,
+  ensureDemoClosePerson,
 } from '../lib/localStore'
+import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
+import { sendGiftInvite } from '../lib/invite'
 
 export default function PeoplePage() {
   const { user } = useAuth()
@@ -31,16 +36,22 @@ export default function PeoplePage() {
   const [closeness, setCloseness] = useState('close')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [sendInvite, setSendInvite] = useState(false)
 
   useEffect(() => {
     if (user) fetchPeople()
   }, [user])
 
-  const fetchPeople = async () => {
-    setLoading(true)
+  const fetchPeople = async (withLoading = true) => {
+    if (withLoading) setLoading(true)
+    const applySorted = (list: ClosePerson[], occasions: Occasion[]) => {
+      setPeople(sortPeopleByNearestOccasion(list, occasions))
+    }
     if (user!.id.startsWith('local-')) {
-      setPeople(getLocalPeople(user!.id))
-      setLoading(false)
+      ensureDemoClosePerson(user!.id)
+      const list = getLocalPeople(user!.id)
+      applySorted(list, getAllLocalOccasions())
+      if (withLoading) setLoading(false)
       return
     }
     try {
@@ -49,13 +60,25 @@ export default function PeoplePage() {
         .select('*')
         .eq('owner_user_id', user!.id)
         .order('created_at', { ascending: false })
-      setPeople(data || getLocalPeople(user!.id))
+      const list = data || getLocalPeople(user!.id)
+      let occs: Occasion[] = getAllLocalOccasions()
+      if (list.length > 0) {
+        const { data: occData } = await supabase
+          .from('occasions')
+          .select('*')
+          .in('person_id', list.map(p => p.id))
+        occs = occData || occs
+      }
+      applySorted(list, occs)
     } catch {
-      setPeople(getLocalPeople(user!.id))
+      const list = getLocalPeople(user!.id)
+      applySorted(list, getAllLocalOccasions())
     } finally {
-      setLoading(false)
+      if (withLoading) setLoading(false)
     }
   }
+
+  const refreshOrder = () => fetchPeople(false)
 
   const handleAdd = async () => {
     setError('')
@@ -139,6 +162,7 @@ export default function PeoplePage() {
           title: 'تولد',
           occasion_date: birthDateStr,
           source: 'birthday',
+          repeats_yearly: true,
         })
       } else {
         try {
@@ -147,6 +171,7 @@ export default function PeoplePage() {
             title: 'تولد',
             occasion_date: birthDateStr,
             source: 'birthday',
+            repeats_yearly: true,
           })
           if (occError) throw occError
         } catch {
@@ -155,19 +180,26 @@ export default function PeoplePage() {
             title: 'تولد',
             occasion_date: birthDateStr,
             source: 'birthday',
+            repeats_yearly: true,
           })
         }
       }
     }
+    const invitePhone = phone
+    const shouldInvite = sendInvite && /^09\d{9}$/.test(invitePhone)
     setName('')
     setPhone('')
     setBirthMonth('')
     setBirthDay('')
     setGender('unknown')
     setCloseness('close')
+    setSendInvite(false)
     setShowAdd(false)
     setSaving(false)
     fetchPeople()
+    if (shouldInvite) {
+      void sendGiftInvite(invitePhone)
+    }
   }
 
   const handleDelete = async (id: string, name: string) => {
@@ -212,7 +244,7 @@ export default function PeoplePage() {
               <>
                 {selfPerson && (
                   <div className="mb-4">
-                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf />
+                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} />
                   </div>
                 )}
                 <EmptyState
@@ -235,12 +267,12 @@ export default function PeoplePage() {
             <>
               {selfPerson && (
                 <div className="mb-4">
-                  <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf />
+                  <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} />
                 </div>
               )}
               <div className="space-y-2">
                 {others.map(person => (
-                  <PersonCard key={person.id} person={person} onDelete={handleDelete} />
+                  <PersonCard key={person.id} person={person} onDelete={handleDelete} onOccasionsChange={refreshOrder} />
                 ))}
               </div>
             </>
@@ -249,15 +281,15 @@ export default function PeoplePage() {
       </div>
 
       {showAdd && (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center" onClick={() => setShowAdd(false)}>
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={() => { setShowAdd(false); setSendInvite(false) }}>
           <div className="absolute inset-0 bg-black/40 animate-fade-in" />
           <div
-            className="relative bg-white w-full max-w-md rounded-t-3xl p-5 pb-24 animate-slide-up"
+            className="relative bg-white w-full rounded-t-3xl p-5 pb-24 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-stone-800">افزودن نزدیک</h2>
-              <button onClick={() => setShowAdd(false)} className="p-1.5 rounded-lg hover:bg-stone-100">
+              <button onClick={() => { setShowAdd(false); setSendInvite(false) }} className="p-1.5 rounded-lg hover:bg-stone-100">
                 <X size={20} className="text-stone-500" />
               </button>
             </div>
@@ -281,11 +313,29 @@ export default function PeoplePage() {
                 <input
                   type="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                  onChange={(e) => {
+                    const next = e.target.value.replace(/\D/g, '').slice(0, 11)
+                    setPhone(next)
+                    if (!next) setSendInvite(false)
+                  }}
                   placeholder="09xxxxxxxxx"
                   dir="ltr"
                   className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
                 />
+                {phone.length > 0 && (
+                  <label className="mt-2 flex items-start gap-2.5 p-3 rounded-xl bg-primary-50 border border-primary-100 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sendInvite}
+                      onChange={(e) => setSendInvite(e.target.checked)}
+                      disabled={!/^09\d{9}$/.test(phone)}
+                      className="mt-0.5 w-4 h-4 rounded border-stone-300 text-primary-500 accent-primary-500"
+                    />
+                    <span className="text-sm text-stone-700 leading-6">
+                      پیام دعوت فرستاده شود
+                    </span>
+                  </label>
+                )}
               </div>
               <div>
                 <label className="text-sm text-stone-600 mb-1 block">تاریخ تولد (اختیاری)</label>
@@ -380,15 +430,20 @@ export default function PeoplePage() {
   )
 }
 
-function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson; onDelete: (id: string, name: string) => void; isSelf?: boolean }) {
+function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { person: ClosePerson; onDelete: (id: string, name: string) => void; isSelf?: boolean; onOccasionsChange?: () => void }) {
+  const [showGreeting, setShowGreeting] = useState(false)
   const [occasions, setOccasions] = useState<Occasion[]>([])
   const [expanded, setExpanded] = useState(false)
   const [showAddOccasion, setShowAddOccasion] = useState(false)
   const [occTitle, setOccTitle] = useState('')
-  const [occDate, setOccDate] = useState('')
+  const [occMonth, setOccMonth] = useState('')
+  const [occDay, setOccDay] = useState('')
+  const [occRepeats, setOccRepeats] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
-  const [editDate, setEditDate] = useState('')
+  const [editMonth, setEditMonth] = useState('')
+  const [editDay, setEditDay] = useState('')
+  const [editRepeats, setEditRepeats] = useState(true)
   const [savingEdit, setSavingEdit] = useState(false)
 
   useEffect(() => {
@@ -414,35 +469,41 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
   }
 
   const nearestOccasion = occasions
-    .filter(o => daysUntil(o.occasion_date) >= -1)
-    .sort((a, b) => daysUntil(a.occasion_date) - daysUntil(b.occasion_date))[0]
-  const nearestDays = nearestOccasion ? daysUntil(nearestOccasion.occasion_date) : null
+    .filter(o => daysUntilOccasion(o) >= -1)
+    .sort((a, b) => daysUntilOccasion(a) - daysUntilOccasion(b))[0]
+  const nearestDays = nearestOccasion ? daysUntilOccasion(nearestOccasion) : null
   const isBirthdayWindow = nearestOccasion && nearestDays !== null && nearestDays >= -1 && nearestDays <= 1 && nearestOccasion.source === 'birthday'
 
   const handleAddOccasion = async () => {
-    if (!occTitle.trim() || !occDate) return
+    if (!occTitle.trim() || !occMonth || !occDay) return
+    const occasionDate = composeOccasionDate(occMonth, occDay)
     createLocalOccasion({
       person_id: person.id,
       title: occTitle.trim(),
-      occasion_date: occDate,
+      occasion_date: occasionDate,
       source: 'manual',
+      repeats_yearly: occRepeats,
     })
     if (!person.owner_user_id.startsWith('local-')) {
       try {
         await supabase.from('occasions').insert({
           person_id: person.id,
           title: occTitle.trim(),
-          occasion_date: occDate,
+          occasion_date: occasionDate,
           source: 'manual',
+          repeats_yearly: occRepeats,
         })
       } catch {
         // local fallback
       }
     }
     setOccTitle('')
-    setOccDate('')
+    setOccMonth('')
+    setOccDay('')
+    setOccRepeats(true)
     setShowAddOccasion(false)
     fetchOccasions()
+    onOccasionsChange?.()
   }
 
   const handleDeleteOccasion = async (id: string) => {
@@ -456,42 +517,49 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
     }
     if (editingId === id) setEditingId(null)
     fetchOccasions()
+    onOccasionsChange?.()
   }
 
   const startEditOccasion = (occ: Occasion) => {
     setShowAddOccasion(false)
     setEditingId(occ.id)
     setEditTitle(occ.title)
-    setEditDate(occ.occasion_date.slice(0, 10))
+    const parsed = parseMonthDay(occ.occasion_date)
+    setEditMonth(parsed.month)
+    setEditDay(parsed.day)
+    setEditRepeats(occ.repeats_yearly ?? occ.source === 'birthday')
   }
 
   const handleSaveOccasion = async () => {
-    if (!editingId || !editTitle.trim() || !editDate) return
+    if (!editingId || !editTitle.trim() || !editMonth || !editDay) return
     setSavingEdit(true)
     const existing = occasions.find(o => o.id === editingId)
     if (!existing) {
       setSavingEdit(false)
       return
     }
+    const occasionDate = composeOccasionDate(editMonth, editDay)
     const updated: Occasion = {
       ...existing,
       title: editTitle.trim(),
-      occasion_date: editDate,
+      occasion_date: occasionDate,
+      repeats_yearly: editRepeats,
       updated_at: new Date().toISOString(),
     }
     upsertLocalOccasion(updated)
     if (existing.source === 'birthday') {
-      upsertLocalPerson({ ...person, birth_date: editDate, updated_at: new Date().toISOString() })
+      upsertLocalPerson({ ...person, birth_date: occasionDate, updated_at: new Date().toISOString() })
     }
     if (!person.owner_user_id.startsWith('local-')) {
       try {
         await supabase.from('occasions').update({
           title: updated.title,
           occasion_date: updated.occasion_date,
+          repeats_yearly: updated.repeats_yearly,
         }).eq('id', existing.id)
         if (existing.source === 'birthday') {
           await supabase.from('close_people').update({
-            birth_date: editDate,
+            birth_date: occasionDate,
             updated_at: new Date().toISOString(),
           }).eq('id', person.id)
         }
@@ -502,6 +570,7 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
     setEditingId(null)
     setSavingEdit(false)
     fetchOccasions()
+    onOccasionsChange?.()
   }
 
   return (
@@ -532,12 +601,12 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
         </Link>
         <div className="flex items-center gap-1">
           {isBirthdayWindow && !isSelf && (
-            <Link
-              to={`/discover?person=${person.id}`}
+            <button
+              onClick={() => setShowGreeting(true)}
               className="px-3 py-1.5 rounded-lg bg-error-500 text-white text-xs font-medium hover:bg-error-600 transition-colors flex items-center gap-1"
             >
               <PartyPopper size={14} /> تبریک
-            </Link>
+            </button>
           )}
           <Link
             to={`/discover?person=${person.id}`}
@@ -563,6 +632,15 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
         </div>
       </div>
 
+      {showGreeting && (
+        <GreetingModal
+          person={person}
+          occasionId={nearestOccasion?.id}
+          occasionTitle={nearestOccasion?.title}
+          onClose={() => setShowGreeting(false)}
+        />
+      )}
+
       {expanded && (
         <div className="px-3.5 pb-3.5 border-t border-stone-100 pt-3 animate-slide-up">
           <div className="flex items-center justify-between mb-2">
@@ -579,22 +657,26 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
           </div>
 
           {showAddOccasion && (
-            <div className="flex gap-2 mb-3 animate-slide-up">
+            <div className="space-y-2 mb-3 animate-slide-up">
               <input
                 value={occTitle}
                 onChange={(e) => setOccTitle(e.target.value)}
                 placeholder="مثلاً تولد"
-                className="flex-1 px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
               />
-              <input
-                type="date"
-                value={occDate}
-                onChange={(e) => setOccDate(e.target.value)}
-                className="px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
+              <OccasionDateFields
+                month={occMonth}
+                day={occDay}
+                onMonth={setOccMonth}
+                onDay={setOccDay}
+                repeats={occRepeats}
+                onRepeats={setOccRepeats}
+                compact
               />
               <button
                 onClick={handleAddOccasion}
-                className="px-3 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium"
+                disabled={!occTitle.trim() || !occMonth || !occDay}
+                className="w-full px-3 py-2 rounded-lg bg-primary-500 text-white text-sm font-medium disabled:opacity-50"
               >
                 ثبت
               </button>
@@ -606,23 +688,24 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
           ) : (
             <div className="space-y-1.5">
               {occasions.map(occ => {
-                const days = daysUntil(occ.occasion_date)
+                const days = daysUntilOccasion(occ)
                 if (editingId === occ.id) {
                   return (
                     <div key={occ.id} className="py-1.5 px-2 rounded-lg bg-stone-50 space-y-2">
-                      <div className="flex gap-2">
-                        <input
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          className="flex-1 px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
-                        />
-                        <input
-                          type="date"
-                          value={editDate}
-                          onChange={(e) => setEditDate(e.target.value)}
-                          className="px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
-                        />
-                      </div>
+                      <input
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
+                      />
+                      <OccasionDateFields
+                        month={editMonth}
+                        day={editDay}
+                        onMonth={setEditMonth}
+                        onDay={setEditDay}
+                        repeats={editRepeats}
+                        onRepeats={setEditRepeats}
+                        compact
+                      />
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={() => setEditingId(null)}
@@ -632,7 +715,7 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
                         </button>
                         <button
                           onClick={handleSaveOccasion}
-                          disabled={savingEdit || !editTitle.trim() || !editDate}
+                          disabled={savingEdit || !editTitle.trim() || !editMonth || !editDay}
                           className="px-3 py-1.5 rounded-lg bg-primary-500 text-white text-xs font-medium disabled:opacity-50"
                         >
                           {savingEdit ? <Loader2 size={12} className="animate-spin" /> : 'ذخیره'}
@@ -646,7 +729,7 @@ function PersonCard({ person, onDelete, isSelf = false }: { person: ClosePerson;
                     <div>
                       <p className="text-sm text-stone-700">{occ.title}</p>
                       <p className="text-xs text-stone-400">
-                        {occ.source === 'birthday' ? formatMonthDay(occ.occasion_date) : formatDate(occ.occasion_date)}
+                        {formatOccasionDate(occ)}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">

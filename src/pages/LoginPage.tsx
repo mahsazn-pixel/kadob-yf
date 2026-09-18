@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Gift, Phone, ShieldCheck, Loader2 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 
 type Step = 'phone' | 'otp' | 'success'
@@ -9,6 +9,8 @@ type Mode = 'login' | 'signup'
 export default function LoginPage() {
   const { session, signInLocal } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const nextPath = searchParams.get('next') === '/discover' ? '/discover' : '/'
   const [step, setStep] = useState<Step>('phone')
   const [mode, setMode] = useState<Mode>('login')
   const [phone, setPhone] = useState('')
@@ -19,8 +21,8 @@ export default function LoginPage() {
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
 
   useEffect(() => {
-    if (session) navigate('/')
-  }, [session, navigate])
+    if (session) navigate(nextPath, { replace: true })
+  }, [session, navigate, nextPath])
 
   useEffect(() => {
     if (countdown > 0) {
@@ -64,7 +66,7 @@ export default function LoginPage() {
     signInLocal(phone)
     setStep('success')
     setLoading(false)
-    setTimeout(() => navigate('/'), 800)
+    setTimeout(() => navigate(nextPath), 800)
   }
 
   const resendOtp = async () => {
