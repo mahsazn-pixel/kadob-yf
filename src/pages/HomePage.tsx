@@ -4,7 +4,7 @@ import { Gift, Calendar, ChevronLeft, Sparkles, Bell, ShoppingBag, PartyPopper }
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { ClosePerson, Occasion, MyOccasion, ShoppingListItem, daysUntilOccasion, formatRemainingTime, sortPeopleByNearestOccasion } from '../lib/types'
-import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson, getDisplayOccasionsForPerson, getLocalOccasions } from '../lib/localStore'
+import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson, getDisplayOccasionsForPerson, getLocalOccasions, getLocalNotifications } from '../lib/localStore'
 import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
 
@@ -15,6 +15,7 @@ export default function HomePage() {
   const [shoppingItems, setShoppingItems] = useState<ShoppingListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [greetingTarget, setGreetingTarget] = useState<{ person: ClosePerson; occasionId: string; occasionTitle: string } | null>(null)
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
     if (!user) return
@@ -34,6 +35,7 @@ export default function HomePage() {
         .slice(0, 3)
       setOccasions(upcoming)
       setShoppingItems(getLocalShoppingItems(user!.id).slice(0, 5))
+      setUnreadCount(getLocalNotifications(user!.id).filter(n => n.status === 'unread').length)
     }
     if (user!.id.startsWith('local-')) {
       applyLocal()
@@ -115,6 +117,11 @@ export default function HomePage() {
           </div>
           <Link to="/notifications" className="relative w-10 h-10 rounded-full bg-black/20 flex items-center justify-center hover:bg-black/30 transition-colors">
             <Bell size={20} className="text-white" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-0.5 -left-0.5 min-w-[16px] h-4 px-1 rounded-full bg-error-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {unreadCount}
+              </span>
+            )}
           </Link>
         </div>
       </div>

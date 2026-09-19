@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { User, LogOut, ShoppingBag, Heart, Edit2, Loader2, Camera, Cake, Calendar, PartyPopper } from 'lucide-react'
+import { User, LogOut, ShoppingBag, Heart, Edit2, Loader2, Camera, Cake, Calendar, PartyPopper, Gift } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { formatMonthDay, Greeting } from '../lib/types'
 import { getLocalGreetingsForReceiver } from '../lib/localStore'
@@ -266,6 +266,16 @@ export default function ProfilePage() {
               <Heart size={20} className="text-primary-600" />
             </div>
             <span className="flex-1 text-right font-medium text-stone-700">لیست آرزوها</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/received-gifts')}
+            className="w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-stone-100 hover:shadow-md transition-all"
+          >
+            <div className="w-10 h-10 rounded-lg bg-success-50 flex items-center justify-center">
+              <Gift size={20} className="text-success-600" />
+            </div>
+            <span className="flex-1 text-right font-medium text-stone-700">هدیه‌های دریافتی</span>
           </button>
 
           <button

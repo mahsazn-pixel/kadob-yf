@@ -9,6 +9,7 @@ import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../l
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import EmptyState from '../components/EmptyState'
+import GiftWheel from '../components/GiftWheel'
 
 interface Card {
   id: string
@@ -126,7 +127,7 @@ export default function DiscoveryPage() {
           'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
         },
         body: JSON.stringify({
-          receiver_id: selectedPerson,
+          receiver_id: receiverId,
           budget_min: budgetMin,
           budget_max: budgetMax,
           occasion_id: occasionId,
@@ -383,6 +384,25 @@ export default function DiscoveryPage() {
       {step === 'select' && (
         <div className="px-4 py-4 animate-fade-in">
           <p className="text-sm text-stone-500 mb-4">چی دوست داری هدیه بگیری؟</p>
+          <GiftWheel
+            spinning={wheelSpinning}
+            disabled={loading}
+            onSpin={() => {
+              if (wheelSpinning || loading) return
+              setWheelSpinning(true)
+              setError('')
+              window.setTimeout(() => {
+                const selfPerson = people.find(p => p.name === 'خودم')
+                const receiver = selfPerson || people[0]
+                if (receiver) {
+                  void startSession(receiver.id)
+                } else {
+                  startLocalSession()
+                }
+                setWheelSpinning(false)
+              }, 1600)
+            }}
+          />
           {people.length === 0 ? (
             <EmptyState
               icon={<ShoppingBag size={32} />}
@@ -486,7 +506,7 @@ export default function DiscoveryPage() {
           </div>
 
           <button
-            onClick={startSession}
+            onClick={() => { void startSession() }}
             disabled={loading || budgetMax <= budgetMin}
             className="w-full mt-4 py-3.5 rounded-xl bg-primary-500 text-white font-semibold shadow-lg shadow-primary-500/30 hover:bg-primary-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
           >

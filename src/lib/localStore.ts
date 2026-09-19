@@ -1,4 +1,4 @@
-import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus, sameMonthDay } from './types'
+import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus, Notification, ReceivedGift, sameMonthDay } from './types'
 import { getCatalogProduct } from './catalog'
 
 const PEOPLE_KEY = 'kadoba_local_people'
@@ -8,6 +8,8 @@ const SHOPPING_KEY = 'kadoba_local_shopping'
 const WISHLIST_KEY = 'kadoba_local_wishlist'
 const MY_OCCASIONS_KEY = 'kadoba_local_my_occasions'
 const GREETINGS_KEY = 'kadoba_local_greetings'
+const NOTIFICATIONS_KEY = 'kadoba_local_notifications'
+const RECEIVED_GIFTS_KEY = 'kadoba_local_received_gifts'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -161,10 +163,28 @@ export function createLocalShoppingItem(input: {
   receiver_id: string
   product_id: string
   session_id?: string | null
+  product?: Product | null
+  status?: string
 }): ShoppingListItem {
   const now = new Date().toISOString()
-  const product = getCatalogProduct(input.product_id) || null
+  const existing = getAllLocalShopping().find(item => (
+    item.user_id === input.user_id
+    && item.receiver_id === input.receiver_id
+    && item.product_id === input.product_id
+    && item.status !== 'gifted'
+  ))
+  if (existing) {
+    const nextStatus = input.status || existing.status
+    return updateLocalShoppingItem(existing.id, {
+      product: input.product || existing.product || getCatalogProduct(input.product_id) || null,
+      status: nextStatus,
+      purchased_at: nextStatus === 'purchased' || nextStatus === 'gifted' ? existing.purchased_at || now : existing.purchased_at,
+      gifted_at: nextStatus === 'gifted' ? existing.gifted_at || now : existing.gifted_at,
+    }) || existing
+  }
+  const product = input.product || getCatalogProduct(input.product_id) || null
   const receiver = getAllLocalPeople().find(p => p.id === input.receiver_id) || null
+  const status = input.status || 'reserved'
   const item: ShoppingListItem = {
     id: crypto.randomUUID(),
     user_id: input.user_id,
@@ -172,11 +192,11 @@ export function createLocalShoppingItem(input: {
     product_id: input.product_id,
     product,
     receiver,
-    status: 'reserved',
+    status,
     session_id: input.session_id || null,
     reserved_at: now,
-    purchased_at: null,
-    gifted_at: null,
+    purchased_at: status === 'purchased' || status === 'gifted' ? now : null,
+    gifted_at: status === 'gifted' ? now : null,
     created_at: now,
     updated_at: now,
   }
@@ -186,6 +206,146 @@ export function createLocalShoppingItem(input: {
 
 function getAllLocalWishlist(): WishlistItem[] {
   return readJson<WishlistItem[]>(WISHLIST_KEY, [])
+}
+
+export function removeLocalWishlistItemByProduct(ownerUserId: string, productId: string) {
+  writeJson(
+    WISHLIST_KEY,
+    getAllLocalWishlist().filter(item => !(item.owner_user_id === ownerUserId && item.product_id === productId)),
+  )
+}
+
+function getAllLocalNotifications(): Notification[] {
+  return readJson<Notification[]>(NOTIFICATIONS_KEY, [])
+}
+
+export function getLocalNotifications(userId: string): Notification[] {
+  return getAllLocalNotifications()
+    .filter(item => item.user_id === userId)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+
+export function addLocalNotification(input: {
+  user_id: string
+  type: string
+  payload_json?: Record<string, unknown>
+}): Notification {
+  const now = new Date().toISOString()
+  const item: Notification = {
+    id: crypto.randomUUID(),
+    user_id: input.user_id,
+    type: input.type,
+    payload_json: input.payload_json || {},
+    scheduled_at: now,
+    sent_at: now,
+    status: 'unread',
+    created_at: now,
+  }
+  writeJson(NOTIFICATIONS_KEY, [item, ...getAllLocalNotifications()])
+  return item
+}
+
+export function updateLocalNotification(id: string, updates: Partial<Notification>): Notification | null {
+  const all = getAllLocalNotifications()
+  const index = all.findIndex(item => item.id === id)
+  if (index < 0) return null
+  const next = { ...all[index], ...updates, id: all[index].id }
+  all[index] = next
+  writeJson(NOTIFICATIONS_KEY, all)
+  return next
+}
+
+function getAllLocalReceivedGifts(): ReceivedGift[] {
+  return readJson<ReceivedGift[]>(RECEIVED_GIFTS_KEY, [])
+}
+
+export function getLocalReceivedGifts(userId: string): ReceivedGift[] {
+  return getAllLocalReceivedGifts()
+    .filter(item => item.receiver_user_id === userId)
+    .map(item => ({ ...item, product: item.product || getCatalogProduct(item.product_id) || null }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+
+export function addLocalReceivedGift(input: {
+  receiver_user_id: string
+  giver_user_id: string
+  giver_name: string
+  product_id: string
+  product?: Product | null
+  shopping_item_id?: string | null
+}): ReceivedGift {
+  const existing = getAllLocalReceivedGifts().find(item => (
+    item.receiver_user_id === input.receiver_user_id
+    && item.giver_user_id === input.giver_user_id
+    && item.product_id === input.product_id
+    && item.shopping_item_id === (input.shopping_item_id || null)
+  ))
+  if (existing) {
+    return {
+      ...existing,
+      product: existing.product || input.product || getCatalogProduct(existing.product_id) || null,
+    }
+  }
+  const item: ReceivedGift = {
+    id: crypto.randomUUID(),
+    receiver_user_id: input.receiver_user_id,
+    giver_user_id: input.giver_user_id,
+    giver_name: input.giver_name,
+    product_id: input.product_id,
+    product: input.product || getCatalogProduct(input.product_id) || null,
+    shopping_item_id: input.shopping_item_id || null,
+    confirmed: false,
+    created_at: new Date().toISOString(),
+  }
+  writeJson(RECEIVED_GIFTS_KEY, [item, ...getAllLocalReceivedGifts()])
+  return item
+}
+
+export function confirmLocalReceivedGift(id: string): ReceivedGift | null {
+  const all = getAllLocalReceivedGifts()
+  const index = all.findIndex(item => item.id === id)
+  if (index < 0) return null
+  const next = { ...all[index], confirmed: true }
+  all[index] = next
+  writeJson(RECEIVED_GIFTS_KEY, all)
+  return next
+}
+
+export function markGiftGiven(input: {
+  giver_user_id: string
+  giver_name: string
+  receiver_person_id: string
+  receiver_user_id?: string | null
+  product_id: string
+  product?: Product | null
+  shopping_item_id?: string | null
+}): Notification | null {
+  const people = getAllLocalPeople()
+  const receiverPerson = people.find(p => p.id === input.receiver_person_id) || null
+  const receiverUserId = input.receiver_user_id
+    || receiverPerson?.linked_user_id
+    || (receiverPerson?.name === 'خودم' ? receiverPerson.owner_user_id : null)
+  if (!receiverUserId) return null
+  removeLocalWishlistItemByProduct(receiverUserId, input.product_id)
+  const received = addLocalReceivedGift({
+    receiver_user_id: receiverUserId,
+    giver_user_id: input.giver_user_id,
+    giver_name: input.giver_name,
+    product_id: input.product_id,
+    product: input.product,
+    shopping_item_id: input.shopping_item_id,
+  })
+  const productTitle = received.product?.title || input.product?.title || 'یک آیتم'
+  return addLocalNotification({
+    user_id: receiverUserId,
+    type: 'gift_received',
+    payload_json: {
+      giver_name: input.giver_name,
+      product_title: productTitle,
+      product_id: input.product_id,
+      received_gift_id: received.id,
+    },
+  })
 }
 
 export function getLocalWishlist(userId: string): WishlistItem[] {

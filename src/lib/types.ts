@@ -162,6 +162,18 @@ export interface Notification {
   created_at: string
 }
 
+export interface ReceivedGift {
+  id: string
+  receiver_user_id: string
+  giver_user_id: string
+  giver_name: string
+  product_id: string
+  product: Product | null
+  shopping_item_id: string | null
+  confirmed: boolean
+  created_at: string
+}
+
 export type ReactionType = 'no' | 'good' | 'great' | 'the_one'
 
 export const REACTION_LABELS: Record<ReactionType, string> = {

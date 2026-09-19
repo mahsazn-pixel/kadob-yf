@@ -6,13 +6,13 @@ import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, Product, MyOccasion, Greeting, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import GreetingModal from '../components/GreetingModal'
-import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion } from '../lib/localStore'
+import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const navigate = useNavigate()
   const [person, setPerson] = useState<ClosePerson | null>(null)
   const [occasions, setOccasions] = useState<Occasion[]>([])
@@ -34,6 +34,43 @@ export default function PersonDetailPage() {
   const [savingEdit, setSavingEdit] = useState(false)
   const [showGreeting, setShowGreeting] = useState(false)
   const [approvedGreetings, setApprovedGreetings] = useState<Greeting[]>([])
+  const [toastMsg, setToastMsg] = useState('')
+
+  const asProduct = (value: Product | Product[] | null | undefined): Product | null => {
+    if (!value) return null
+    return Array.isArray(value) ? value[0] || null : value
+  }
+
+  const wishlistKeys = (item: { id?: string; product_id?: string; product: Product | Product[] | null }) => {
+    const product = asProduct(item.product)
+    return [item.product_id, product?.id, item.id].filter(Boolean) as string[]
+  }
+
+  const resolveWishlistItem = (item: { id?: string; product_id?: string; product: Product | Product[] | null }) => {
+    const product = asProduct(item.product)
+    const productId = item.product_id || product?.id || item.id || ''
+    return { product, productId }
+  }
+
+  const statusForItem = (item: { id?: string; product_id?: string; product: Product | null }) => {
+    for (const key of wishlistKeys(item)) {
+      if (shopStatus[key]) return shopStatus[key]
+    }
+    return undefined
+  }
+
+  const writeStatus = (item: { id?: string; product_id?: string; product: Product | null }, record: { id: string; status: string }) => {
+    setShopStatus(prev => {
+      const next = { ...prev }
+      for (const key of wishlistKeys(item)) next[key] = record
+      return next
+    })
+  }
+
+  const showToast = (message: string) => {
+    setToastMsg(message)
+    window.setTimeout(() => setToastMsg(''), 2500)
+  }
 
   useEffect(() => {
     if (!user || !id) return
@@ -54,7 +91,12 @@ export default function PersonDetailPage() {
         const visibleWish = getLocalWishlist(personRec.linked_user_id).filter(item => (
           item.visibility === 'public' || closeness === 'very_close'
         ))
-        setWishlistItems(visibleWish.map(item => ({ id: item.id, product_id: item.product_id, product: item.product, visibility: item.visibility })))
+        setWishlistItems(visibleWish.map(item => ({
+          id: item.id,
+          product_id: item.product_id,
+          product: asProduct(item.product),
+          visibility: item.visibility,
+        })))
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
@@ -67,10 +109,11 @@ export default function PersonDetailPage() {
         if (!merged.some(p => p.id === g.id)) merged.push(g)
       }
       setApprovedGreetings(merged)
-      const shopping = getLocalShoppingItems(user!.id).filter(i => i.receiver_id === id)
+      const shopping = getLocalShoppingItems(user!.id).filter(i => i.receiver_id === id || i.receiver_id === personRec?.id)
       const map: Record<string, { id: string; status: string }> = {}
       for (const s of shopping) {
         if (s.product_id) map[s.product_id] = { id: s.id, status: s.status }
+        if (s.id) map[s.id] = { id: s.id, status: s.status }
       }
       setShopStatus(map)
     }
@@ -111,7 +154,12 @@ export default function PersonDetailPage() {
           .eq('owner_user_id', personRec.linked_user_id)
           .in('visibility', ['public', 'private'])
           .order('created_at', { ascending: false })
-        setWishlistItems((wishData || []) as unknown as { id?: string; product_id?: string; product: Product | null; visibility: string }[])
+        setWishlistItems(((wishData || []) as { id?: string; product_id?: string; product: Product | Product[] | null; visibility: string }[]).map(item => ({
+          id: item.id,
+          product_id: item.product_id,
+          product: asProduct(item.product),
+          visibility: item.visibility,
+        })))
         const visibilities = personRec.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
         const { data: sharedData } = await supabase
           .from('my_occasions')
@@ -262,78 +310,112 @@ export default function PersonDetailPage() {
   const productKey = (item: { id?: string; product_id?: string; product: Product | null }) =>
     item.product_id || item.product?.id || item.id || ''
 
-  const handleReserve = async (item: { product_id?: string; product: Product | null }) => {
-    if (!user || !person) return
-    const productId = item.product_id || item.product?.id
-    if (!productId) return
+  const persistShoppingStatus = async (
+    item: { id?: string; product_id?: string; product: Product | Product[] | null },
+    status: 'reserved' | 'purchased' | 'gifted',
+  ) => {
+    if (!user || !person) {
+      showToast('ابتدا وارد شوید')
+      return
+    }
+    const { product, productId } = resolveWishlistItem(item)
+    if (!productId) {
+      showToast('آیتم هدیه نامعتبر است')
+      return
+    }
+    const now = new Date().toISOString()
+    const current = shopStatus[productId] || (item.id ? shopStatus[item.id] : undefined)
     setUpdatingProduct(productId)
-    const localItem = createLocalShoppingItem({
-      user_id: user.id,
-      receiver_id: person.id,
-      product_id: productId,
+    setShopStatus(prev => {
+      const next = { ...prev, [productId]: { id: current?.id || productId, status } }
+      if (item.id) next[item.id] = { id: current?.id || productId, status }
+      if (product?.id) next[product.id] = { id: current?.id || productId, status }
+      return next
     })
-    setShopStatus(prev => ({ ...prev, [productId]: { id: localItem.id, status: 'reserved' } }))
-    if (!user.id.startsWith('local-')) {
-      try {
-        const { data } = await supabase.from('shopping_list_items').insert({
+    try {
+      let localItem = current?.id ? updateLocalShoppingItem(current.id, {
+        status,
+        product: product || undefined,
+        purchased_at: status === 'purchased' || status === 'gifted' ? now : current && undefined,
+        gifted_at: status === 'gifted' ? now : undefined,
+      }) : null
+      if (!localItem) {
+        localItem = createLocalShoppingItem({
           user_id: user.id,
           receiver_id: person.id,
           product_id: productId,
-          status: 'reserved',
-          reserved_at: new Date().toISOString(),
-        }).select('id').maybeSingle()
-        if (data?.id) {
-          setShopStatus(prev => ({ ...prev, [productId]: { id: data.id, status: 'reserved' } }))
-        }
-      } catch {
-        // local fallback
+          product,
+          status,
+        })
       }
+      if (status === 'gifted') {
+        updateLocalShoppingItem(localItem.id, {
+          status: 'gifted',
+          purchased_at: localItem.purchased_at || now,
+          gifted_at: now,
+          product: product || localItem.product,
+        })
+        markGiftGiven({
+          giver_user_id: user.id,
+          giver_name: profile?.name || 'یک کاربر',
+          receiver_person_id: person.id,
+          receiver_user_id: person.linked_user_id,
+          product_id: productId,
+          product: product || localItem.product,
+          shopping_item_id: localItem.id,
+        })
+        showToast('هدیه ثبت شد و به گیرنده اطلاع داده شد')
+      }
+      setShopStatus(prev => {
+        const next = { ...prev, [productId]: { id: localItem.id, status } }
+        if (item.id) next[item.id] = { id: localItem.id, status }
+        if (product?.id) next[product.id] = { id: localItem.id, status }
+        return next
+      })
+      if (!user.id.startsWith('local-')) {
+        try {
+          if (current?.id && current.id !== productId) {
+            await supabase.from('shopping_list_items').update({
+              status,
+              purchased_at: status === 'purchased' || status === 'gifted' ? now : null,
+              gifted_at: status === 'gifted' ? now : null,
+              updated_at: now,
+            }).eq('id', current.id)
+          } else {
+            const { data } = await supabase.from('shopping_list_items').insert({
+              user_id: user.id,
+              receiver_id: person.id,
+              product_id: productId,
+              status,
+              reserved_at: now,
+              purchased_at: status === 'purchased' || status === 'gifted' ? now : null,
+              gifted_at: status === 'gifted' ? now : null,
+            }).select('id').maybeSingle()
+            if (data?.id) {
+              setShopStatus(prev => ({ ...prev, [productId]: { id: data.id, status } }))
+            }
+          }
+        } catch {
+          // local fallback
+        }
+      }
+    } catch {
+      showToast('ثبت هدیه انجام نشد')
+    } finally {
+      setUpdatingProduct(null)
     }
-    setUpdatingProduct(null)
   }
 
-  const handleMarkPurchased = async (item: { product_id?: string; product: Product | null }) => {
-    if (!user || !person) return
-    const productId = item.product_id || item.product?.id
-    if (!productId) return
-    setUpdatingProduct(productId)
-    const now = new Date().toISOString()
-    let shopId = shopStatus[productId]?.id
-    if (!shopId) {
-      const created = createLocalShoppingItem({
-        user_id: user.id,
-        receiver_id: person.id,
-        product_id: productId,
-      })
-      shopId = created.id
-      updateLocalShoppingItem(shopId, { status: 'purchased', purchased_at: now })
-    } else {
-      updateLocalShoppingItem(shopId, { status: 'purchased', purchased_at: now })
-    }
-    setShopStatus(prev => ({ ...prev, [productId]: { id: shopId!, status: 'purchased' } }))
-    if (!user.id.startsWith('local-')) {
-      try {
-        if (shopStatus[productId]?.id) {
-          await supabase.from('shopping_list_items').update({
-            status: 'purchased',
-            purchased_at: now,
-            updated_at: now,
-          }).eq('id', shopStatus[productId].id)
-        } else {
-          await supabase.from('shopping_list_items').insert({
-            user_id: user.id,
-            receiver_id: person.id,
-            product_id: productId,
-            status: 'purchased',
-            reserved_at: now,
-            purchased_at: now,
-          })
-        }
-      } catch {
-        // local fallback
-      }
-    }
-    setUpdatingProduct(null)
+  const handleReserve = (item: { id?: string; product_id?: string; product: Product | null }) => {
+    void persistShoppingStatus(item, 'reserved')
+  }
+
+  const handleMarkPurchased = (item: { id?: string; product_id?: string; product: Product | null }) => {
+    void persistShoppingStatus(item, 'purchased')
+  }
+
+  const handleMarkGifted = (item: { id?: string; product_id?: string; product: Product | null }) => {
+    void persistShoppingStatus(item, 'gifted')
   }
 
   if (loading) {
@@ -585,13 +667,23 @@ export default function PersonDetailPage() {
                           <ShoppingBag size={14} /> خرید
                         </a>
                       )}
-                      {current?.status === 'purchased' || current?.status === 'gifted' ? (
+                      {isSelf ? null : current?.status === 'gifted' ? (
                         <div className="flex-1 py-2 text-xs font-medium text-success-600 flex items-center justify-center gap-1 border-r border-stone-100">
-                          <Check size={14} /> خریدم
+                          <Gift size={14} /> هدیه داده شد
                         </div>
+                      ) : current?.status === 'purchased' ? (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkGifted(item) }}
+                          disabled={busy}
+                          className="flex-1 py-2 text-xs font-medium text-success-600 hover:bg-success-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                        >
+                          <Gift size={14} /> هدیه دادم
+                        </button>
                       ) : current?.status === 'reserved' ? (
                         <button
-                          onClick={() => handleMarkPurchased(item)}
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
                           disabled={busy}
                           className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
                         >
@@ -600,14 +692,16 @@ export default function PersonDetailPage() {
                       ) : (
                         <>
                           <button
-                            onClick={() => handleReserve(item)}
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleReserve(item) }}
                             disabled={busy}
                             className="flex-1 py-2 text-xs font-medium text-error-600 hover:bg-error-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
                           >
                             رزرو
                           </button>
                           <button
-                            onClick={() => handleMarkPurchased(item)}
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
                             disabled={busy}
                             className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
                           >
@@ -623,6 +717,14 @@ export default function PersonDetailPage() {
           </section>
         )}
       </div>
+
+      {toastMsg && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 px-5 flex justify-center pointer-events-none">
+          <div className="px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg">
+            {toastMsg}
+          </div>
+        </div>
+      )}
 
       {showGreeting && (
         <GreetingModal

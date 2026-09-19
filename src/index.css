@@ -41,7 +41,26 @@
 
 @keyframes wheelSpin {
   from { transform: rotate(0deg); }
-  to { transform: rotate(1080deg); }
+  to { transform: rotate(1440deg); }
+}
+
+@keyframes wheelSparkle {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50% { opacity: 0.9; transform: scale(1.15); }
+}
+
+@keyframes wheelRibbon {
+  0% { transform: rotate(-12deg) translateY(0); opacity: 0.55; }
+  50% { transform: rotate(-8deg) translateY(-4px); opacity: 0.85; }
+  100% { transform: rotate(-12deg) translateY(0); opacity: 0.55; }
+}
+
+.gift-wheel-disk {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+  will-change: transform;
 }
 
 .gift-wheel-idle {
@@ -49,8 +68,36 @@
 }
 
 .gift-wheel-spin {
-  animation: wheelSpin 1.15s cubic-bezier(0.22, 0.8, 0.28, 1) forwards;
+  animation: wheelSpin 1.6s cubic-bezier(0.17, 0.67, 0.12, 1) forwards;
 }
+
+.gift-wheel-sparkle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: radial-gradient(circle, #fff 0%, #f3d77a 55%, transparent 70%);
+  animation: wheelSparkle 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.gift-wheel-sparkle-a { top: 18px; left: 28px; animation-delay: 0s; }
+.gift-wheel-sparkle-b { top: 36px; right: 32px; width: 6px; height: 6px; animation-delay: 0.6s; }
+.gift-wheel-sparkle-c { bottom: 28px; left: 36px; width: 7px; height: 7px; animation-delay: 1.1s; }
+.gift-wheel-sparkle-d { bottom: 44px; right: 24px; animation-delay: 1.7s; }
+
+.gift-wheel-ribbon {
+  position: absolute;
+  width: 28px;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #e8c36a, transparent);
+  pointer-events: none;
+  animation: wheelRibbon 3.2s ease-in-out infinite;
+}
+
+.gift-wheel-ribbon-a { top: 22px; right: 18px; }
+.gift-wheel-ribbon-b { bottom: 22px; left: 16px; animation-delay: 1.4s; }
 
 * {
   -webkit-tap-highlight-color: transparent;

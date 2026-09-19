@@ -4,7 +4,7 @@ import { ShoppingBag, Loader2, Check, Gift, X, ExternalLink } from 'lucide-react
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ShoppingListItem, formatPrice } from '../lib/types'
-import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem } from '../lib/localStore'
+import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem, markGiftGiven } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -12,7 +12,7 @@ import EmptyState from '../components/EmptyState'
 type Tab = 'all' | 'reserved' | 'purchased' | 'gifted'
 
 export default function ShoppingListPage() {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const navigate = useNavigate()
   const [items, setItems] = useState<ShoppingListItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -51,6 +51,20 @@ export default function ShoppingListPage() {
     if (status === 'purchased') updates.purchased_at = new Date().toISOString()
     if (status === 'gifted') updates.gifted_at = new Date().toISOString()
     updateLocalShoppingItem(id, updates)
+    if (status === 'gifted') {
+      const current = items.find(item => item.id === id)
+      if (current) {
+        markGiftGiven({
+          giver_user_id: user!.id,
+          giver_name: profile?.name || 'یک کاربر',
+          receiver_person_id: current.receiver_id,
+          receiver_user_id: current.receiver?.linked_user_id,
+          product_id: current.product_id,
+          product: current.product,
+          shopping_item_id: current.id,
+        })
+      }
+    }
     if (!user!.id.startsWith('local-')) {
       try {
         await supabase.from('shopping_list_items').update({

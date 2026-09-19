@@ -11,6 +11,8 @@ import ProfilePage from './pages/ProfilePage'
 import MyOccasionsPage from './pages/MyOccasionsPage'
 import GreetingsPage from './pages/GreetingsPage'
 import InvitePage from './pages/InvitePage'
+import NotificationsPage from './pages/NotificationsPage'
+import ReceivedGiftsPage from './pages/ReceivedGiftsPage'
 import { Loader2 } from 'lucide-react'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -40,6 +42,8 @@ export default function App() {
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
       <Route path="/my-occasions" element={<ProtectedRoute><MyOccasionsPage /></ProtectedRoute>} />
       <Route path="/greetings" element={<ProtectedRoute><GreetingsPage /></ProtectedRoute>} />
+      <Route path="/notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
+      <Route path="/received-gifts" element={<ProtectedRoute><ReceivedGiftsPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
