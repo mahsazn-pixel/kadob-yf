@@ -276,9 +276,7 @@ export function addLocalReceivedGift(input: {
 }): ReceivedGift {
   const existing = getAllLocalReceivedGifts().find(item => (
     item.receiver_user_id === input.receiver_user_id
-    && item.giver_user_id === input.giver_user_id
     && item.product_id === input.product_id
-    && item.shopping_item_id === (input.shopping_item_id || null)
   ))
   if (existing) {
     return {
@@ -555,6 +553,16 @@ function seedDemoWishlist() {
     { id: 'demo-wish-2', productId: 'p009', visibility: 'public' },
     { id: 'demo-wish-3', productId: 'p027', visibility: 'private' },
     { id: 'demo-wish-4', productId: 'p012', visibility: 'public' },
+    { id: 'demo-wish-5', productId: 'p002', visibility: 'public' },
+    { id: 'demo-wish-6', productId: 'p019', visibility: 'public' },
+    { id: 'demo-wish-7', productId: 'p021', visibility: 'public' },
+    { id: 'demo-wish-8', productId: 'p025', visibility: 'public' },
+    { id: 'demo-wish-9', productId: 'p037', visibility: 'public' },
+    { id: 'demo-wish-10', productId: 'p016', visibility: 'public' },
+    { id: 'demo-wish-11', productId: 'p022', visibility: 'public' },
+    { id: 'demo-wish-12', productId: 'p024', visibility: 'public' },
+    { id: 'demo-wish-13', productId: 'p033', visibility: 'public' },
+    { id: 'demo-wish-14', productId: 'p015', visibility: 'public' },
   ]
   let changed = false
   const next = [...existing]
@@ -627,6 +635,33 @@ function seedDemoGreetings() {
   }, ...existing])
 }
 
+function seedDemoReceivedGifts() {
+  const existing = getAllLocalReceivedGifts()
+  const specs: { id: string; productId: string; giverName: string; giverUserId: string; confirmed: boolean }[] = [
+    { id: 'demo-recv-1', productId: 'p011', giverName: 'سارا محمدی', giverUserId: 'local-09121111111', confirmed: true },
+    { id: 'demo-recv-2', productId: 'p006', giverName: 'رضا کریمی', giverUserId: 'local-09123333333', confirmed: false },
+    { id: 'demo-recv-3', productId: 'p022', giverName: 'مینا احمدی', giverUserId: 'local-09124444444', confirmed: true },
+  ]
+  let changed = false
+  const next = [...existing]
+  for (const spec of specs) {
+    if (next.some(item => item.id === spec.id || (item.receiver_user_id === DEMO_USER_ID && item.product_id === spec.productId))) continue
+    next.unshift({
+      id: spec.id,
+      receiver_user_id: DEMO_USER_ID,
+      giver_user_id: spec.giverUserId,
+      giver_name: spec.giverName,
+      product_id: spec.productId,
+      product: getCatalogProduct(spec.productId) || null,
+      shopping_item_id: null,
+      confirmed: spec.confirmed,
+      created_at: new Date().toISOString(),
+    })
+    changed = true
+  }
+  if (changed) writeJson(RECEIVED_GIFTS_KEY, next)
+}
+
 function seedDemoShopping() {
   const now = new Date().toISOString()
   const product = getCatalogProduct('p002') || null
@@ -678,6 +713,7 @@ export function seedDemoUser() {
   seedDemoMyOccasions()
   seedDemoGreetings()
   seedDemoShopping()
+  seedDemoReceivedGifts()
 }
 
 export function ensureDemoClosePerson(ownerUserId: string) {

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { UserPlus, Users, X, Loader2, Trash2, Calendar, PartyPopper, Edit2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, MyOccasion, daysUntilOccasion, formatOccasionDate, parseMonthDay, composeOccasionDate, sortPeopleByNearestOccasion } from '../lib/types'
+import { ClosePerson, Occasion, MyOccasion, CLOSENESS_OPTIONS, closenessLabel, normalizeCloseness, daysUntilOccasion, formatOccasionDate, parseMonthDay, composeOccasionDate, sortPeopleByNearestOccasion } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import {
   getLocalPeople,
@@ -35,7 +35,7 @@ export default function PeoplePage() {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [gender, setGender] = useState('unknown')
-  const [closeness, setCloseness] = useState('close')
+  const [closeness, setCloseness] = useState('very_close')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [sendInvite, setSendInvite] = useState(false)
@@ -180,7 +180,7 @@ export default function PeoplePage() {
     setName('')
     setPhone('')
     setGender('unknown')
-    setCloseness('close')
+    setCloseness('very_close')
     setSendInvite(false)
     setShowAdd(false)
     setSaving(false)
@@ -232,7 +232,7 @@ export default function PeoplePage() {
               <>
                 {selfPerson && (
                   <div className="mb-4">
-                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} />
+                    <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} onUpdated={refreshOrder} />
                   </div>
                 )}
                 <EmptyState
@@ -255,12 +255,12 @@ export default function PeoplePage() {
             <>
               {selfPerson && (
                 <div className="mb-4">
-                  <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} />
+                  <PersonCard key={selfPerson.id} person={selfPerson} onDelete={handleDelete} isSelf onOccasionsChange={refreshOrder} onUpdated={refreshOrder} />
                 </div>
               )}
               <div className="space-y-2">
                 {others.map(person => (
-                  <PersonCard key={person.id} person={person} onDelete={handleDelete} onOccasionsChange={refreshOrder} />
+                  <PersonCard key={person.id} person={person} onDelete={handleDelete} onOccasionsChange={refreshOrder} onUpdated={refreshOrder} />
                 ))}
               </div>
             </>
@@ -348,13 +348,10 @@ export default function PeoplePage() {
               <div>
                 <label className="text-sm text-stone-600 mb-1 block">میزان نزدیکی</label>
                 <div className="flex gap-2">
-                  {[
-                    { v: 'very_close', l: 'خیلی نزدیک' },
-                    { v: 'close', l: 'نزدیک' },
-                    { v: 'acquaintance', l: 'آشنا' },
-                  ].map(c => (
+                  {CLOSENESS_OPTIONS.map(c => (
                     <button
                       key={c.v}
+                      type="button"
                       onClick={() => setCloseness(c.v)}
                       className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
                         closeness === c.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
@@ -383,7 +380,7 @@ export default function PeoplePage() {
   )
 }
 
-function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { person: ClosePerson; onDelete: (id: string, name: string) => void; isSelf?: boolean; onOccasionsChange?: () => void }) {
+function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange, onUpdated }: { person: ClosePerson; onDelete: (id: string, name: string) => void; isSelf?: boolean; onOccasionsChange?: () => void; onUpdated?: () => void }) {
   const [showGreeting, setShowGreeting] = useState(false)
   const [occasions, setOccasions] = useState<Occasion[]>([])
   const [expanded, setExpanded] = useState(false)
@@ -398,6 +395,12 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
   const [editDay, setEditDay] = useState('')
   const [editRepeats, setEditRepeats] = useState(true)
   const [savingEdit, setSavingEdit] = useState(false)
+  const [editingPerson, setEditingPerson] = useState(false)
+  const [editName, setEditName] = useState(person.name)
+  const [editPhone, setEditPhone] = useState(person.phone || '')
+  const [editCloseness, setEditCloseness] = useState(normalizeCloseness(person.closeness))
+  const [savingPerson, setSavingPerson] = useState(false)
+  const [editError, setEditError] = useState('')
 
   useEffect(() => {
     fetchOccasions()
@@ -499,6 +502,47 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
     setEditRepeats(occ.repeats_yearly ?? occ.source === 'birthday')
   }
 
+  const openEditPerson = () => {
+    setEditName(person.name)
+    setEditPhone(person.phone || '')
+    setEditCloseness(normalizeCloseness(person.closeness))
+    setEditError('')
+    setEditingPerson(true)
+  }
+
+  const handleSavePerson = async () => {
+    if (!editName.trim()) {
+      setEditError('نام را وارد کنید')
+      return
+    }
+    setSavingPerson(true)
+    const now = new Date().toISOString()
+    const nextPhone = editPhone.replace(/\D/g, '').slice(0, 11) || null
+    const updated: ClosePerson = {
+      ...person,
+      name: editName.trim(),
+      phone: nextPhone,
+      closeness: editCloseness,
+      updated_at: now,
+    }
+    upsertLocalPerson(updated)
+    if (!person.owner_user_id.startsWith('local-')) {
+      try {
+        await supabase.from('close_people').update({
+          name: updated.name,
+          phone: updated.phone,
+          closeness: updated.closeness,
+          updated_at: now,
+        }).eq('id', person.id)
+      } catch {
+        // local fallback
+      }
+    }
+    setSavingPerson(false)
+    setEditingPerson(false)
+    onUpdated?.()
+  }
+
   const handleSaveOccasion = async () => {
     if (!editingId || !editTitle.trim() || !editMonth || !editDay) return
     setSavingEdit(true)
@@ -556,6 +600,9 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
         </Link>
         <Link to={`/people/${person.id}`} className="flex-1 min-w-0">
           <p className="font-semibold text-stone-800">{person.name}</p>
+          {!isSelf && (
+            <p className="text-xs text-stone-500 mt-0.5">{closenessLabel(person.closeness)}{person.phone ? ` • ${person.phone}` : ''}</p>
+          )}
           {occasions.length > 0 && (
             <p className="text-xs text-stone-500">{occasions.length} مناسبت</p>
           )}
@@ -590,16 +637,86 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange }: { p
             <Calendar size={18} className="text-stone-400" />
           </button>
           {!isSelf && (
-            <button
-              onClick={() => onDelete(person.id, person.name)}
-              className="p-1.5 rounded-lg hover:bg-error-50 transition-colors"
-              aria-label={`حذف ${person.name}`}
-            >
-              <Trash2 size={16} className="text-stone-400 hover:text-error-500 transition-colors" />
-            </button>
+            <>
+              <button
+                onClick={openEditPerson}
+                className="p-1.5 rounded-lg hover:bg-stone-100 transition-colors"
+                aria-label={`ویرایش ${person.name}`}
+              >
+                <Edit2 size={16} className="text-stone-400 hover:text-primary-500 transition-colors" />
+              </button>
+              <button
+                onClick={() => onDelete(person.id, person.name)}
+                className="p-1.5 rounded-lg hover:bg-error-50 transition-colors"
+                aria-label={`حذف ${person.name}`}
+              >
+                <Trash2 size={16} className="text-stone-400 hover:text-error-500 transition-colors" />
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {editingPerson && (
+        <div className="px-3.5 pb-3.5 border-t border-stone-100 pt-3 animate-slide-up">
+          {editError && (
+            <div className="mb-2 px-3 py-2 rounded-lg bg-error-50 text-error-600 text-sm">{editError}</div>
+          )}
+          <div className="space-y-2">
+            <div>
+              <label className="text-xs text-stone-600 mb-1 block">نام</label>
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-stone-600 mb-1 block">شماره تلفن</label>
+              <input
+                type="tel"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                placeholder="09xxxxxxxxx"
+                dir="ltr"
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm outline-none focus:border-primary-400"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-stone-600 mb-1 block">میزان نزدیکی</label>
+              <div className="flex gap-2">
+                {CLOSENESS_OPTIONS.map(c => (
+                  <button
+                    key={c.v}
+                    type="button"
+                    onClick={() => setEditCloseness(c.v)}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
+                      editCloseness === c.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
+                    }`}
+                  >
+                    {c.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                onClick={() => setEditingPerson(false)}
+                className="px-3 py-1.5 rounded-lg text-xs text-stone-500 hover:bg-stone-100"
+              >
+                انصراف
+              </button>
+              <button
+                onClick={handleSavePerson}
+                disabled={savingPerson || !editName.trim()}
+                className="px-3 py-1.5 rounded-lg bg-primary-500 text-white text-xs font-medium disabled:opacity-50"
+              >
+                {savingPerson ? <Loader2 size={12} className="animate-spin" /> : 'ذخیره'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showGreeting && (
         <GreetingModal

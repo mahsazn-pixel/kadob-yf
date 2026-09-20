@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Plus, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Product, ReactionType, REACTION_LABELS, formatPrice } from '../lib/types'
+import { ClosePerson, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice } from '../lib/types'
 import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem } from '../lib/localStore'
 import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
@@ -439,7 +439,7 @@ export default function DiscoveryPage() {
                   <div className="flex-1">
                     <p className="font-semibold text-stone-800">{person.name}</p>
                     <p className="text-xs text-stone-500">
-                      {self ? 'هدیه برای خودم' : person.closeness === 'very_close' ? 'خیلی نزدیک' : person.closeness === 'close' ? 'نزدیک' : 'آشنا'}
+                      {self ? 'هدیه برای خودم' : closenessLabel(person.closeness)}
                     </p>
                   </div>
                   <ChevronLeft size={20} className="text-stone-400" />

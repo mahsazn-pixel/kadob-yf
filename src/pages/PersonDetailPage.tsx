@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Calendar, Gift, Trash2, Loader2, PartyPopper, Heart, Edit2, ShoppingBag, Check } from 'lucide-react'
+import { Calendar, Gift, Trash2, Loader2, PartyPopper, Heart, Edit2, ShoppingBag, Check, Plus, X, UserPlus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Occasion, Product, MyOccasion, Greeting, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
+import { ClosePerson, Occasion, Product, MyOccasion, Greeting, ReceivedGift, CLOSENESS_OPTIONS, closenessLabel, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import GreetingModal from '../components/GreetingModal'
-import { getAllLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven } from '../lib/localStore'
+import { getAllLocalPeople, getLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, createLocalPerson, findLocalProfileByPhone, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven, getLocalReceivedGifts, addLocalWishlistItem } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 
@@ -34,7 +34,24 @@ export default function PersonDetailPage() {
   const [savingEdit, setSavingEdit] = useState(false)
   const [showGreeting, setShowGreeting] = useState(false)
   const [approvedGreetings, setApprovedGreetings] = useState<Greeting[]>([])
+  const [receivedGifts, setReceivedGifts] = useState<ReceivedGift[]>([])
   const [toastMsg, setToastMsg] = useState('')
+  const [showAllOccasions, setShowAllOccasions] = useState(false)
+  const [showAllGreetings, setShowAllGreetings] = useState(false)
+  const [showAllWishlist, setShowAllWishlist] = useState(false)
+  const [showAllReceived, setShowAllReceived] = useState(false)
+  const [previewProduct, setPreviewProduct] = useState<Product | null>(null)
+  const [previewSource, setPreviewSource] = useState<'wishlist' | 'received' | null>(null)
+  const [ownWishlistIds, setOwnWishlistIds] = useState<Set<string>>(new Set())
+  const [wishlistSaving, setWishlistSaving] = useState(false)
+  const [closePeople, setClosePeople] = useState<ClosePerson[]>([])
+  const [reserveTargetProduct, setReserveTargetProduct] = useState<Product | null>(null)
+  const [selectedReceiverId, setSelectedReceiverId] = useState('')
+  const [showAddReceiver, setShowAddReceiver] = useState(false)
+  const [newReceiverName, setNewReceiverName] = useState('')
+  const [newReceiverPhone, setNewReceiverPhone] = useState('')
+  const [newReceiverCloseness, setNewReceiverCloseness] = useState('very_close')
+  const [savingReceiver, setSavingReceiver] = useState(false)
 
   const asProduct = (value: Product | Product[] | null | undefined): Product | null => {
     if (!value) return null
@@ -97,9 +114,11 @@ export default function PersonDetailPage() {
           product: asProduct(item.product),
           visibility: item.visibility,
         })))
+        setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
+        setReceivedGifts([])
       }
       const personGreetings = getLocalGreetingsForPerson(id!, ['approved'])
       const linkedGreetings = personRec?.linked_user_id ? getLocalGreetingsForReceiver(personRec.linked_user_id, ['approved']) : []
@@ -116,6 +135,8 @@ export default function PersonDetailPage() {
         if (s.id) map[s.id] = { id: s.id, status: s.status }
       }
       setShopStatus(map)
+      setOwnWishlistIds(new Set(getLocalWishlist(user!.id).map(item => item.product_id)))
+      setClosePeople(getLocalPeople(user!.id).filter(p => p.name !== 'خودم'))
     }
     if (user!.id.startsWith('local-')) {
       applyLocal()
@@ -160,6 +181,7 @@ export default function PersonDetailPage() {
           product: asProduct(item.product),
           visibility: item.visibility,
         })))
+        setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
         const visibilities = personRec.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
         const { data: sharedData } = await supabase
           .from('my_occasions')
@@ -194,12 +216,17 @@ export default function PersonDetailPage() {
           }
         }
         setShopStatus(map)
+        setOwnWishlistIds(new Set(getLocalWishlist(user!.id).map(item => item.product_id)))
+        setClosePeople(getLocalPeople(user!.id).filter(p => p.name !== 'خودم'))
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
+        setReceivedGifts([])
         setOccasions((occasionsData as Occasion[] | null) || getLocalOccasions(id!))
         setApprovedGreetings(getLocalGreetingsForPerson(id!, ['approved']))
         setShopStatus({})
+        setOwnWishlistIds(new Set(getLocalWishlist(user!.id).map(item => item.product_id)))
+        setClosePeople(getLocalPeople(user!.id).filter(p => p.name !== 'خودم'))
       }
     } catch {
       applyLocal()
@@ -313,6 +340,7 @@ export default function PersonDetailPage() {
   const persistShoppingStatus = async (
     item: { id?: string; product_id?: string; product: Product | Product[] | null },
     status: 'reserved' | 'purchased' | 'gifted',
+    receiverOverride?: ClosePerson | null,
   ) => {
     if (!user || !person) {
       showToast('ابتدا وارد شوید')
@@ -323,15 +351,21 @@ export default function PersonDetailPage() {
       showToast('آیتم هدیه نامعتبر است')
       return
     }
+    const targetPerson = receiverOverride || person
+    const trackOnProfile = !receiverOverride || receiverOverride.id === person.id
     const now = new Date().toISOString()
-    const current = shopStatus[productId] || (item.id ? shopStatus[item.id] : undefined)
+    const current = trackOnProfile
+      ? (shopStatus[productId] || (item.id ? shopStatus[item.id] : undefined))
+      : undefined
     setUpdatingProduct(productId)
-    setShopStatus(prev => {
-      const next = { ...prev, [productId]: { id: current?.id || productId, status } }
-      if (item.id) next[item.id] = { id: current?.id || productId, status }
-      if (product?.id) next[product.id] = { id: current?.id || productId, status }
-      return next
-    })
+    if (trackOnProfile) {
+      setShopStatus(prev => {
+        const next = { ...prev, [productId]: { id: current?.id || productId, status } }
+        if (item.id) next[item.id] = { id: current?.id || productId, status }
+        if (product?.id) next[product.id] = { id: current?.id || productId, status }
+        return next
+      })
+    }
     try {
       let localItem = current?.id ? updateLocalShoppingItem(current.id, {
         status,
@@ -342,7 +376,7 @@ export default function PersonDetailPage() {
       if (!localItem) {
         localItem = createLocalShoppingItem({
           user_id: user.id,
-          receiver_id: person.id,
+          receiver_id: targetPerson.id,
           product_id: productId,
           product,
           status,
@@ -358,20 +392,35 @@ export default function PersonDetailPage() {
         markGiftGiven({
           giver_user_id: user.id,
           giver_name: profile?.name || 'یک کاربر',
-          receiver_person_id: person.id,
-          receiver_user_id: person.linked_user_id,
+          receiver_person_id: targetPerson.id,
+          receiver_user_id: targetPerson.linked_user_id,
           product_id: productId,
           product: product || localItem.product,
           shopping_item_id: localItem.id,
         })
-        showToast('هدیه ثبت شد و به گیرنده اطلاع داده شد')
+        if (item.id) {
+          try {
+            await supabase.from('wishlist_items').delete().eq('id', item.id)
+          } catch {
+            // local fallback
+          }
+        }
+        setWishlistItems(prev => prev.filter(w => {
+          const keys = new Set(wishlistKeys(w))
+          return !keys.has(productId) && !(item.id && keys.has(item.id)) && !(product?.id && keys.has(product.id))
+        }))
+        showToast('هدیه ثبت شد و از لیست خواسته‌ها حذف شد')
+      } else if (status === 'reserved' && receiverOverride) {
+        showToast(`برای ${targetPerson.name} رزرو شد`)
       }
-      setShopStatus(prev => {
-        const next = { ...prev, [productId]: { id: localItem.id, status } }
-        if (item.id) next[item.id] = { id: localItem.id, status }
-        if (product?.id) next[product.id] = { id: localItem.id, status }
-        return next
-      })
+      if (trackOnProfile) {
+        setShopStatus(prev => {
+          const next = { ...prev, [productId]: { id: localItem.id, status } }
+          if (item.id) next[item.id] = { id: localItem.id, status }
+          if (product?.id) next[product.id] = { id: localItem.id, status }
+          return next
+        })
+      }
       if (!user.id.startsWith('local-')) {
         try {
           if (current?.id && current.id !== productId) {
@@ -384,14 +433,14 @@ export default function PersonDetailPage() {
           } else {
             const { data } = await supabase.from('shopping_list_items').insert({
               user_id: user.id,
-              receiver_id: person.id,
+              receiver_id: targetPerson.id,
               product_id: productId,
               status,
               reserved_at: now,
               purchased_at: status === 'purchased' || status === 'gifted' ? now : null,
               gifted_at: status === 'gifted' ? now : null,
             }).select('id').maybeSingle()
-            if (data?.id) {
+            if (data?.id && trackOnProfile) {
               setShopStatus(prev => ({ ...prev, [productId]: { id: data.id, status } }))
             }
           }
@@ -418,6 +467,118 @@ export default function PersonDetailPage() {
     void persistShoppingStatus(item, 'gifted')
   }
 
+  const closeReservePicker = () => {
+    setReserveTargetProduct(null)
+    setSelectedReceiverId('')
+    setShowAddReceiver(false)
+    setNewReceiverName('')
+    setNewReceiverPhone('')
+    setNewReceiverCloseness('very_close')
+  }
+
+  const receiverChoices = closePeople.filter(p => p.id !== person?.id)
+
+  const openReservePicker = (product: Product) => {
+    setReserveTargetProduct(product)
+    setSelectedReceiverId(receiverChoices[0]?.id || '')
+    setShowAddReceiver(false)
+  }
+
+  const confirmReserveForReceiver = () => {
+    if (!reserveTargetProduct || !selectedReceiverId) {
+      showToast('یک نزدیک را انتخاب کنید')
+      return
+    }
+    const receiver = closePeople.find(p => p.id === selectedReceiverId)
+    if (!receiver) {
+      showToast('نزدیک انتخاب‌شده یافت نشد')
+      return
+    }
+    void persistShoppingStatus({ product_id: reserveTargetProduct.id, product: reserveTargetProduct }, 'reserved', receiver)
+    closeReservePicker()
+    setPreviewProduct(null)
+    setPreviewSource(null)
+  }
+
+  const addReceiverAndSelect = async () => {
+    if (!user) return
+    if (!newReceiverName.trim()) {
+      showToast('نام را وارد کنید')
+      return
+    }
+    setSavingReceiver(true)
+    let linkedUserId: string | null = null
+    let birthDateStr: string | null = null
+    if (newReceiverPhone) {
+      const localMatch = findLocalProfileByPhone(newReceiverPhone)
+      if (localMatch) {
+        linkedUserId = localMatch.id
+        birthDateStr = localMatch.birth_date
+      }
+    }
+    const created = createLocalPerson({
+      owner_user_id: user.id,
+      linked_user_id: linkedUserId,
+      name: newReceiverName.trim(),
+      phone: newReceiverPhone || null,
+      avatar_url: null,
+      birth_date: birthDateStr,
+      gender: 'unknown',
+      closeness: newReceiverCloseness,
+    })
+    if (!user.id.startsWith('local-')) {
+      try {
+        await supabase.from('close_people').insert({
+          id: created.id,
+          owner_user_id: user.id,
+          name: created.name,
+          phone: created.phone,
+          birth_date: created.birth_date,
+          gender: created.gender,
+          closeness: created.closeness,
+          linked_user_id: created.linked_user_id,
+        })
+      } catch {
+        // local fallback
+      }
+    }
+    setClosePeople(prev => [created, ...prev.filter(p => p.id !== created.id)])
+    setSelectedReceiverId(created.id)
+    setShowAddReceiver(false)
+    setNewReceiverName('')
+    setNewReceiverPhone('')
+    setNewReceiverCloseness('very_close')
+    setSavingReceiver(false)
+    showToast(`${created.name} اضافه شد`)
+  }
+
+  const addPreviewToWishlist = async (product: Product) => {
+    if (!user) {
+      showToast('ابتدا وارد شوید')
+      return
+    }
+    if (ownWishlistIds.has(product.id)) {
+      showToast('قبلاً به لیست خواسته‌ها اضافه شده')
+      return
+    }
+    setWishlistSaving(true)
+    addLocalWishlistItem(user.id, product.id)
+    setOwnWishlistIds(prev => new Set(prev).add(product.id))
+    if (!user.id.startsWith('local-')) {
+      try {
+        await supabase.from('wishlist_items').insert({ owner_user_id: user.id, product_id: product.id })
+      } catch {
+        // local fallback
+      }
+    }
+    showToast('به لیست خواسته‌ها افزوده شد')
+    setWishlistSaving(false)
+  }
+
+  const previewShopStatus = previewProduct
+    ? shopStatus[previewProduct.id]
+    : undefined
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -441,6 +602,11 @@ export default function PersonDetailPage() {
   const birthdayDays = birthdayOccasion ? daysUntilOccasion(birthdayOccasion) : null
   const isSelf = person.name === 'خودم'
   const isBirthdayWindow = birthdayDays !== null && birthdayDays >= -1 && birthdayDays <= 1 && !isSelf
+  const visitorView = !isSelf
+  const visibleOccasions = visitorView && !showAllOccasions ? occasions.slice(-3) : occasions
+  const visibleGreetings = visitorView && !showAllGreetings ? approvedGreetings.slice(-3) : approvedGreetings
+  const visibleWishlist = visitorView && !showAllWishlist ? wishlistItems.slice(-4) : wishlistItems
+  const visibleReceived = visitorView && !showAllReceived ? receivedGifts.slice(-4) : receivedGifts
 
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
@@ -458,6 +624,9 @@ export default function PersonDetailPage() {
             </div>
             <div>
               <h2 className="text-xl font-bold">{person.name}</h2>
+              {!isSelf && (
+                <p className="text-sm text-white/80">{closenessLabel(person.closeness)}{person.phone ? ` • ${person.phone}` : ''}</p>
+              )}
               {displayBirthDate && (
                 <p className="text-sm text-white/80">متولد {formatMonthDay(displayBirthDate)}</p>
               )}
@@ -487,15 +656,26 @@ export default function PersonDetailPage() {
               <Calendar size={18} className="text-primary-500" />
               مناسبت‌ها
             </h3>
-            <button
-              onClick={() => {
-                setEditingId(null)
-                setShowAddOccasion(!showAddOccasion)
-              }}
-              className="text-sm text-primary-600 font-medium"
-            >
-              {showAddOccasion ? 'انصراف' : 'افزودن'}
-            </button>
+            <div className="flex items-center gap-3">
+              {visitorView && occasions.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllOccasions(v => !v)}
+                  className="text-sm text-primary-600 font-medium"
+                >
+                  {showAllOccasions ? 'کمتر' : 'همه'}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setEditingId(null)
+                  setShowAddOccasion(!showAddOccasion)
+                }}
+                className="text-sm text-primary-600 font-medium"
+              >
+                {showAddOccasion ? 'انصراف' : 'افزودن'}
+              </button>
+            </div>
           </div>
 
           {showAddOccasion && (
@@ -530,7 +710,7 @@ export default function PersonDetailPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {occasions.map(occ => {
+              {visibleOccasions.map(occ => {
                 const days = daysUntilOccasion(occ)
                 const inWindow = days >= -1 && days <= 1
                 if (editingId === occ.id) {
@@ -615,12 +795,23 @@ export default function PersonDetailPage() {
 
         {approvedGreetings.length > 0 && (
           <section className="mb-6">
-            <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
-              <PartyPopper size={18} className="text-error-500" />
-              پیام‌های تبریک
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-stone-800 flex items-center gap-2">
+                <PartyPopper size={18} className="text-error-500" />
+                پیام‌های تبریک
+              </h3>
+              {visitorView && approvedGreetings.length > 3 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllGreetings(v => !v)}
+                  className="text-sm text-primary-600 font-medium"
+                >
+                  {showAllGreetings ? 'کمتر' : 'همه'}
+                </button>
+              )}
+            </div>
             <div className="space-y-2">
-              {approvedGreetings.map(item => (
+              {visibleGreetings.map(item => (
                 <div key={item.id} className="p-3 rounded-xl bg-white border border-stone-100">
                   <p className="text-sm font-medium text-stone-800">{item.sender_name}</p>
                   {item.occasion_title && <p className="text-xs text-stone-400 mt-0.5">{item.occasion_title}</p>}
@@ -633,87 +824,195 @@ export default function PersonDetailPage() {
 
         {person.linked_user_id && wishlistItems.length > 0 && (
           <section className="mb-6">
-            <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
-              <Heart size={18} className="text-primary-500" />
-              لیست خواسته‌ها
-            </h3>
-            <div className="space-y-2">
-              {wishlistItems.map((item, idx) => {
-                const pid = productKey(item)
-                const current = pid ? shopStatus[pid] : undefined
-                const busy = updatingProduct === pid
-                return (
-                  <div key={pid || idx} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-stone-800 flex items-center gap-2">
+                <Heart size={18} className="text-primary-500" />
+                لیست خواسته‌ها
+              </h3>
+              {visitorView && wishlistItems.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllWishlist(v => !v)}
+                  className="text-sm text-primary-600 font-medium"
+                >
+                  {showAllWishlist ? 'کمتر' : 'همه'}
+                </button>
+              )}
+            </div>
+            {visitorView && !showAllWishlist ? (
+              <div className="grid grid-cols-4 gap-2">
+                {visibleWishlist.map((item, idx) => {
+                  const pid = productKey(item)
+                  return (
+                    <button
+                      key={pid || idx}
+                      type="button"
+                    onClick={() => {
+                      if (!item.product) return
+                      setPreviewSource('received')
+                      setPreviewProduct(item.product)
+                    }}
+                      className="aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
+                    >
+                      {item.product?.image_url ? (
+                        <img src={item.product.image_url} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Heart size={16} className="text-stone-300" />
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {wishlistItems.map((item, idx) => {
+                  const pid = productKey(item)
+                  const current = pid ? shopStatus[pid] : undefined
+                  const busy = updatingProduct === pid
+                  return (
+                    <div key={pid || idx} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
+                      <button
+                        type="button"
+                      onClick={() => {
+                        if (!item.product) return
+                        setPreviewSource('wishlist')
+                        setPreviewProduct(item.product)
+                      }}
+                        className="w-full flex items-center gap-3 p-3 text-right"
+                      >
+                        {item.product?.image_url && (
+                          <img src={item.product.image_url} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title}</p>
+                          <p className="text-xs text-stone-500">
+                            {item.product ? formatPrice(item.product.price_amount) : ''}
+                          </p>
+                        </div>
+                        {busy && <Loader2 size={16} className="animate-spin text-stone-400 shrink-0" />}
+                      </button>
+                      {!isSelf && (
+                        <div className="flex border-t border-stone-100">
+                          {item.product?.shop_url && (
+                            <a
+                              href={item.product.shop_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 py-2 text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors flex items-center justify-center gap-1"
+                            >
+                              <ShoppingBag size={14} /> خرید
+                            </a>
+                          )}
+                          {current?.status === 'gifted' ? (
+                            <div className="flex-1 py-2 text-xs font-medium text-success-600 flex items-center justify-center gap-1 border-r border-stone-100">
+                              <Gift size={14} /> هدیه داده شد
+                            </div>
+                          ) : current?.status === 'purchased' ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkGifted(item) }}
+                              disabled={busy}
+                              className="flex-1 py-2 text-xs font-medium text-success-600 hover:bg-success-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                            >
+                              <Gift size={14} /> هدیه دادم
+                            </button>
+                          ) : current?.status === 'reserved' ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
+                              disabled={busy}
+                              className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                            >
+                              <Check size={14} /> خریدم
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleReserve(item) }}
+                                disabled={busy}
+                                className="flex-1 py-2 text-xs font-medium text-error-600 hover:bg-error-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                              >
+                                رزرو
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
+                                disabled={busy}
+                                className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
+                              >
+                                <Check size={14} /> خریدم
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
+        {person.linked_user_id && receivedGifts.length > 0 && (
+          <section className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-stone-800 flex items-center gap-2">
+                <Gift size={18} className="text-success-500" />
+                هدیه‌های دریافتی
+              </h3>
+              {visitorView && receivedGifts.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllReceived(v => !v)}
+                  className="text-sm text-primary-600 font-medium"
+                >
+                  {showAllReceived ? 'کمتر' : 'همه'}
+                </button>
+              )}
+            </div>
+            {visitorView ? (
+              <div className="grid grid-cols-4 gap-2">
+                {visibleReceived.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => item.product && setPreviewProduct(item.product)}
+                    className="aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
+                  >
+                    {item.product?.image_url ? (
+                      <img src={item.product.image_url} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Gift size={16} className="text-stone-300" />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {receivedGifts.map(item => (
+                  <div key={item.id} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
                     <div className="flex items-center gap-3 p-3">
                       {item.product?.image_url && (
                         <img src={item.product.image_url} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
                       )}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title}</p>
-                        <p className="text-xs text-stone-500">
-                          {item.product ? formatPrice(item.product.price_amount) : ''}
-                        </p>
+                        <p className="text-xs text-stone-500">از طرف {item.giver_name}</p>
                       </div>
-                      {busy && <Loader2 size={16} className="animate-spin text-stone-400 shrink-0" />}
-                    </div>
-                    <div className="flex border-t border-stone-100">
-                      {item.product?.shop_url && (
-                        <a
-                          href={item.product.shop_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex-1 py-2 text-xs font-medium text-primary-600 hover:bg-primary-50 transition-colors flex items-center justify-center gap-1"
-                        >
-                          <ShoppingBag size={14} /> خرید
-                        </a>
-                      )}
-                      {isSelf ? null : current?.status === 'gifted' ? (
-                        <div className="flex-1 py-2 text-xs font-medium text-success-600 flex items-center justify-center gap-1 border-r border-stone-100">
-                          <Gift size={14} /> هدیه داده شد
-                        </div>
-                      ) : current?.status === 'purchased' ? (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkGifted(item) }}
-                          disabled={busy}
-                          className="flex-1 py-2 text-xs font-medium text-success-600 hover:bg-success-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
-                        >
-                          <Gift size={14} /> هدیه دادم
-                        </button>
-                      ) : current?.status === 'reserved' ? (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
-                          disabled={busy}
-                          className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
-                        >
-                          <Check size={14} /> خریدم
-                        </button>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleReserve(item) }}
-                            disabled={busy}
-                            className="flex-1 py-2 text-xs font-medium text-error-600 hover:bg-error-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
-                          >
-                            رزرو
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPurchased(item) }}
-                            disabled={busy}
-                            className="flex-1 py-2 text-xs font-medium text-secondary-600 hover:bg-secondary-50 transition-colors flex items-center justify-center gap-1 border-r border-stone-100 disabled:opacity-50"
-                          >
-                            <Check size={14} /> خریدم
-                          </button>
-                        </>
+                      {item.confirmed && (
+                        <span className="text-[11px] font-medium text-success-600 shrink-0">تأیید شده</span>
                       )}
                     </div>
                   </div>
-                )
-              })}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
       </div>
@@ -722,6 +1021,99 @@ export default function PersonDetailPage() {
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 px-5 flex justify-center pointer-events-none">
           <div className="px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg">
             {toastMsg}
+          </div>
+        </div>
+      )}
+
+      {previewProduct && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-6" onClick={() => setPreviewProduct(null)}>
+          <div
+            className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative">
+              {previewProduct.image_url ? (
+                <img src={previewProduct.image_url} alt="" className="w-full aspect-square object-cover" />
+              ) : (
+                <div className="w-full aspect-square bg-stone-100 flex items-center justify-center">
+                  <Gift size={40} className="text-stone-300" />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setPreviewProduct(null)}
+                className="absolute top-3 left-3 w-9 h-9 rounded-full bg-neutral-900/80 text-white flex items-center justify-center"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-4">
+              <p className="text-sm text-stone-500">{previewProduct.merchant_name}</p>
+              <h3 className="font-bold text-stone-800 mt-1">{previewProduct.title}</h3>
+              <p className="text-primary-600 font-bold mt-2">{formatPrice(previewProduct.price_amount)}</p>
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                {previewProduct.shop_url && (
+                  <a
+                    href={previewProduct.shop_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="py-2.5 rounded-xl bg-primary-500 text-white text-xs font-medium flex items-center justify-center gap-1"
+                  >
+                    <ShoppingBag size={14} /> خرید
+                  </a>
+                )}
+                {previewShopStatus?.status === 'gifted' ? (
+                  <div className="py-2.5 rounded-xl bg-success-50 text-success-600 text-xs font-medium flex items-center justify-center gap-1">
+                    <Gift size={14} /> هدیه داده شد
+                  </div>
+                ) : previewShopStatus?.status === 'purchased' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void persistShoppingStatus({ product_id: previewProduct.id, product: previewProduct }, 'gifted')
+                      setPreviewProduct(null)
+                    }}
+                    disabled={updatingProduct === previewProduct.id}
+                    className="py-2.5 rounded-xl bg-success-50 text-success-600 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50"
+                  >
+                    <Gift size={14} /> هدیه دادم
+                  </button>
+                ) : previewShopStatus?.status === 'reserved' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void persistShoppingStatus({ product_id: previewProduct.id, product: previewProduct }, 'purchased')
+                      setPreviewProduct(null)
+                    }}
+                    disabled={updatingProduct === previewProduct.id}
+                    className="py-2.5 rounded-xl bg-secondary-50 text-secondary-600 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50"
+                  >
+                    <Check size={14} /> خریدم
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void persistShoppingStatus({ product_id: previewProduct.id, product: previewProduct }, 'reserved')
+                      setPreviewProduct(null)
+                    }}
+                    disabled={updatingProduct === previewProduct.id}
+                    className="py-2.5 rounded-xl bg-error-50 text-error-600 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50"
+                  >
+                    رزرو
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { void addPreviewToWishlist(previewProduct) }}
+                  disabled={wishlistSaving || ownWishlistIds.has(previewProduct.id)}
+                  className="py-2.5 rounded-xl bg-stone-100 text-stone-700 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 col-span-2"
+                >
+                  {ownWishlistIds.has(previewProduct.id) ? <Check size={14} /> : <Plus size={14} />}
+                  افزودن به لیست خواسته‌ها
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

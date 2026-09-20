@@ -22,6 +22,19 @@ export interface ClosePerson {
   updated_at: string
 }
 
+export const CLOSENESS_OPTIONS = [
+  { v: 'very_close', l: 'صمیمی' },
+  { v: 'formal', l: 'رسمی' },
+] as const
+
+export function closenessLabel(value: string): string {
+  return value === 'very_close' ? 'صمیمی' : 'رسمی'
+}
+
+export function normalizeCloseness(value: string): 'very_close' | 'formal' {
+  return value === 'very_close' ? 'very_close' : 'formal'
+}
+
 export interface Occasion {
   id: string
   person_id: string
