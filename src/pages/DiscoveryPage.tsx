@@ -3,13 +3,14 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Plus, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice } from '../lib/types'
-import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem } from '../lib/localStore'
+import { ClosePerson, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS } from '../lib/types'
+import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson } from '../lib/localStore'
 import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import EmptyState from '../components/EmptyState'
 import GiftWheel from '../components/GiftWheel'
+import { sendGiftInvite } from '../lib/invite'
 
 interface Card {
   id: string
@@ -57,6 +58,15 @@ export default function DiscoveryPage() {
   const [localDeck, setLocalDeck] = useState<Card[]>([])
   const [localReactions, setLocalReactions] = useState<{ product_id: string; reaction: ReactionType }[]>([])
   const [wheelSpinning, setWheelSpinning] = useState(false)
+  const [pendingTheOneProductId, setPendingTheOneProductId] = useState<string | null>(null)
+  const [pickerReceiverId, setPickerReceiverId] = useState('')
+  const [showAddReceiver, setShowAddReceiver] = useState(false)
+  const [newReceiverName, setNewReceiverName] = useState('')
+  const [newReceiverPhone, setNewReceiverPhone] = useState('')
+  const [newReceiverGender, setNewReceiverGender] = useState('unknown')
+  const [newReceiverCloseness, setNewReceiverCloseness] = useState('very_close')
+  const [sendInvite, setSendInvite] = useState(false)
+  const [savingReceiver, setSavingReceiver] = useState(false)
   const isLocalUser = !!user?.id.startsWith('local-')
 
   useEffect(() => {
@@ -110,11 +120,10 @@ export default function DiscoveryPage() {
 
   const startSession = async (personOverride?: string) => {
     const receiverId = personOverride || selectedPerson
-    if (!receiverId) return
     if (personOverride) setSelectedPerson(personOverride)
     setLoading(true)
     setError('')
-    if (isLocalUser) {
+    if (isLocalUser || !receiverId) {
       startLocalSession()
       setLoading(false)
       return
@@ -181,8 +190,12 @@ export default function DiscoveryPage() {
     const nextReactions = [...localReactions, { product_id: productId, reaction }]
     setLocalReactions(nextReactions)
     if (reaction === 'the_one') {
+      if (!selectedPerson) {
+        openReceiverPicker(productId)
+        return
+      }
       const product = getCatalogProduct(productId)
-      if (user && selectedPerson) {
+      if (user) {
         createLocalShoppingItem({
           user_id: user.id,
           receiver_id: selectedPerson,
@@ -205,6 +218,10 @@ export default function DiscoveryPage() {
   const handleReaction = async (reaction: ReactionType) => {
     if (!session || currentIdx >= currentCards.length) return
     const card = currentCards[currentIdx]
+    if (reaction === 'the_one' && !selectedPerson) {
+      openReceiverPicker(card.product_id)
+      return
+    }
     setLoading(true)
 
     if (isLocalUser || localDeck.length > 0) {
@@ -319,8 +336,206 @@ export default function DiscoveryPage() {
     }
   }
 
+  const resetAddReceiverForm = () => {
+    setShowAddReceiver(false)
+    setNewReceiverName('')
+    setNewReceiverPhone('')
+    setNewReceiverGender('unknown')
+    setNewReceiverCloseness('very_close')
+    setSendInvite(false)
+  }
+
+  const openReceiverPicker = (productId: string) => {
+    setPendingTheOneProductId(productId)
+    setPickerReceiverId('')
+    resetAddReceiverForm()
+  }
+
+  const closeReceiverPicker = () => {
+    setPendingTheOneProductId(null)
+    setPickerReceiverId('')
+    resetAddReceiverForm()
+  }
+
+  const proceedTheOne = async (productId: string, receiverId: string) => {
+    setSelectedPerson(receiverId)
+    setPendingTheOneProductId(null)
+    setLoading(true)
+    const finishLocal = () => {
+      if (user) {
+        createLocalShoppingItem({
+          user_id: user.id,
+          receiver_id: receiverId,
+          product_id: productId,
+          session_id: session?.session_id,
+        })
+      }
+      setShopUrl(getCatalogProduct(productId)?.shop_url || null)
+      setStep('success')
+    }
+    if (isLocalUser || localDeck.length > 0 || !session) {
+      finishLocal()
+      setLoading(false)
+      return
+    }
+    try {
+      const token = (await supabase.auth.getSession()).data.session?.access_token
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discovery-reaction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          product_id: productId,
+          reaction: 'the_one',
+          session_id: session.session_id,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        if (user) {
+          createLocalShoppingItem({
+            user_id: user.id,
+            receiver_id: receiverId,
+            product_id: productId,
+            session_id: session.session_id,
+          })
+        }
+        setShopUrl(data.data.shop_url)
+        setStep('success')
+      } else {
+        finishLocal()
+      }
+    } catch {
+      finishLocal()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const confirmReceiverAndReserve = async () => {
+    if (!pendingTheOneProductId) return
+    const productId = pendingTheOneProductId
+    if (showAddReceiver) {
+      const created = await addReceiverAndSelect()
+      if (!created) return
+      void proceedTheOne(productId, created.id)
+      closeReceiverPicker()
+      return
+    }
+    if (!pickerReceiverId) {
+      setToastMsg('یک نزدیک را انتخاب کنید')
+      setTimeout(() => setToastMsg(''), 2500)
+      return
+    }
+    const receiver = people.find(p => p.id === pickerReceiverId)
+    if (!receiver) {
+      setToastMsg('نزدیک انتخاب‌شده یافت نشد')
+      setTimeout(() => setToastMsg(''), 2500)
+      return
+    }
+    void proceedTheOne(productId, receiver.id)
+    closeReceiverPicker()
+  }
+
+  const addReceiverAndSelect = async (): Promise<ClosePerson | null> => {
+    if (!user) return null
+    if (!newReceiverName.trim()) {
+      setToastMsg('نام را وارد کنید')
+      setTimeout(() => setToastMsg(''), 2500)
+      return null
+    }
+    setSavingReceiver(true)
+    const isLocal = user.id.startsWith('local-')
+    let linkedUserId: string | null = null
+    let birthDateStr: string | null = null
+    if (newReceiverPhone) {
+      const localMatch = findLocalProfileByPhone(newReceiverPhone)
+      if (localMatch) {
+        linkedUserId = localMatch.id
+        birthDateStr = localMatch.birth_date
+      }
+    }
+    if (!isLocal && newReceiverPhone && !linkedUserId) {
+      try {
+        const { data: profileMatch } = await supabase
+          .from('profiles')
+          .select('id, birth_date')
+          .eq('phone_number', newReceiverPhone)
+          .maybeSingle()
+        linkedUserId = profileMatch?.id || null
+        birthDateStr = profileMatch?.birth_date || null
+      } catch {
+        linkedUserId = null
+      }
+    }
+    let created: ClosePerson | null = null
+    if (isLocal) {
+      created = createLocalPerson({
+        owner_user_id: user.id,
+        linked_user_id: linkedUserId,
+        name: newReceiverName.trim(),
+        phone: newReceiverPhone || null,
+        avatar_url: null,
+        birth_date: birthDateStr,
+        gender: newReceiverGender,
+        closeness: newReceiverCloseness,
+      })
+    } else {
+      try {
+        const { data, error: insertError } = await supabase
+          .from('close_people')
+          .insert({
+            owner_user_id: user.id,
+            name: newReceiverName.trim(),
+            phone: newReceiverPhone || null,
+            birth_date: birthDateStr,
+            gender: newReceiverGender,
+            closeness: newReceiverCloseness,
+            linked_user_id: linkedUserId,
+          })
+          .select()
+          .single()
+        if (insertError) throw insertError
+        created = data
+      } catch {
+        created = createLocalPerson({
+          owner_user_id: user.id,
+          linked_user_id: linkedUserId,
+          name: newReceiverName.trim(),
+          phone: newReceiverPhone || null,
+          avatar_url: null,
+          birth_date: birthDateStr,
+          gender: newReceiverGender,
+          closeness: newReceiverCloseness,
+        })
+      }
+    }
+    if (!created) {
+      setSavingReceiver(false)
+      return null
+    }
+    if (linkedUserId) {
+      applyLinkedAccountToPerson({ ...created, linked_user_id: linkedUserId })
+    }
+    const invitePhone = newReceiverPhone
+    const shouldInvite = !linkedUserId && /^09\d{9}$/.test(invitePhone)
+    setPeople(prev => [created!, ...prev.filter(p => p.id !== created!.id)])
+    setPickerReceiverId(created.id)
+    setSavingReceiver(false)
+    if (shouldInvite) {
+      void sendGiftInvite(invitePhone)
+    }
+    return created
+  }
+
   const handleReserveFromReview = async (productId: string) => {
     if (!session) return
+    if (!selectedPerson) {
+      openReceiverPicker(productId)
+      return
+    }
     setLoading(true)
     const finishLocal = () => {
       if (user && selectedPerson) {
@@ -392,13 +607,7 @@ export default function DiscoveryPage() {
               setWheelSpinning(true)
               setError('')
               window.setTimeout(() => {
-                const selfPerson = people.find(p => p.name === 'خودم')
-                const receiver = selfPerson || people[0]
-                if (receiver) {
-                  void startSession(receiver.id)
-                } else {
-                  startLocalSession()
-                }
+                void startSession()
                 setWheelSpinning(false)
               }, 1600)
             }}
@@ -712,6 +921,136 @@ export default function DiscoveryPage() {
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 px-5 flex justify-center pointer-events-none">
           <div className="px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg animate-slide-up">
             {toastMsg}
+          </div>
+        </div>
+      )}
+
+      {pendingTheOneProductId && (
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={closeReceiverPicker}>
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" />
+          <div
+            className="relative bg-white w-full rounded-t-3xl p-5 pb-24 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-stone-800">این هدیه برای کیست؟</h2>
+              <button type="button" onClick={closeReceiverPicker} className="p-1.5 rounded-lg hover:bg-stone-100">
+                <X size={20} className="text-stone-500" />
+              </button>
+            </div>
+            <p className="text-sm text-stone-600 mb-4">یکی از نزدیکان را انتخاب کنید</p>
+            <div className="mb-4 space-y-3">
+              <label className="text-sm text-stone-600 mb-1 block">انتخاب نزدیک</label>
+              <select
+                value={pickerReceiverId}
+                onChange={(e) => setPickerReceiverId(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all bg-white"
+              >
+                <option value="">یک نفر را انتخاب کنید</option>
+                {people.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}{p.name === 'خودم' ? '' : ` (${closenessLabel(p.closeness)})`}
+                  </option>
+                ))}
+              </select>
+              {!showAddReceiver && (
+                <button
+                  type="button"
+                  onClick={() => setShowAddReceiver(true)}
+                  className="text-sm text-primary-600 font-medium"
+                >
+                  افزودن نزدیک جدید
+                </button>
+              )}
+              {showAddReceiver && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm text-stone-600 mb-1 block">نام *</label>
+                    <input
+                      value={newReceiverName}
+                      onChange={(e) => setNewReceiverName(e.target.value)}
+                      placeholder="مثلاً مریم"
+                      className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm text-stone-600 mb-1 block">شماره موبایل (اختیاری)</label>
+                    <input
+                      type="tel"
+                      value={newReceiverPhone}
+                      onChange={(e) => {
+                        const next = e.target.value.replace(/\D/g, '').slice(0, 11)
+                        setNewReceiverPhone(next)
+                        if (!next) setSendInvite(false)
+                      }}
+                      placeholder="09xxxxxxxxx"
+                      dir="ltr"
+                      className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                    />
+                    {newReceiverPhone.length > 0 && (
+                      <label className="mt-2 flex items-start gap-2.5 p-3 rounded-xl bg-primary-50 border border-primary-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={sendInvite}
+                          onChange={(e) => setSendInvite(e.target.checked)}
+                          disabled={!/^09\d{9}$/.test(newReceiverPhone)}
+                          className="mt-0.5 w-4 h-4 rounded border-stone-300 text-primary-500 accent-primary-500"
+                        />
+                        <span className="text-sm text-stone-700 leading-6">
+                          پیام دعوت فرستاده شود
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-sm text-stone-600 mb-1 block">جنسیت</label>
+                    <div className="flex gap-2">
+                      {[
+                        { v: 'male', l: 'مرد' },
+                        { v: 'female', l: 'زن' },
+                        { v: 'unknown', l: 'نامشخص' },
+                      ].map(g => (
+                        <button
+                          key={g.v}
+                          type="button"
+                          onClick={() => setNewReceiverGender(g.v)}
+                          className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                            newReceiverGender === g.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
+                          }`}
+                        >
+                          {g.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm text-stone-600 mb-1 block">میزان نزدیکی</label>
+                    <div className="flex gap-2">
+                      {CLOSENESS_OPTIONS.map(c => (
+                        <button
+                          key={c.v}
+                          type="button"
+                          onClick={() => setNewReceiverCloseness(c.v)}
+                          className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                            newReceiverCloseness === c.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
+                          }`}
+                        >
+                          {c.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => { void confirmReceiverAndReserve() }}
+              disabled={loading || savingReceiver}
+              className="w-full py-3.5 rounded-xl bg-primary-500 text-white font-semibold hover:bg-primary-600 disabled:opacity-50 transition-all"
+            >
+              تأیید
+            </button>
           </div>
         </div>
       )}

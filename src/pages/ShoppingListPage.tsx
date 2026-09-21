@@ -63,6 +63,15 @@ export default function ShoppingListPage() {
           product: current.product,
           shopping_item_id: current.id,
         })
+        const receiverUserId = current.receiver?.linked_user_id
+          || (current.receiver?.name === 'خودم' ? current.receiver.owner_user_id : null)
+        if (!user!.id.startsWith('local-') && receiverUserId) {
+          try {
+            await supabase.from('wishlist_items').delete().eq('owner_user_id', receiverUserId).eq('product_id', current.product_id)
+          } catch {
+            // local fallback
+          }
+        }
       }
     }
     if (!user!.id.startsWith('local-')) {

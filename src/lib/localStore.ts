@@ -303,7 +303,19 @@ export function confirmLocalReceivedGift(id: string): ReceivedGift | null {
   const all = getAllLocalReceivedGifts()
   const index = all.findIndex(item => item.id === id)
   if (index < 0) return null
-  const next = { ...all[index], confirmed: true }
+  const next = { ...all[index], confirmed: true, rejected: false }
+  all[index] = next
+  writeJson(RECEIVED_GIFTS_KEY, all)
+  return next
+}
+
+export function rejectLocalReceivedGift(id: string): ReceivedGift | null {
+  const all = getAllLocalReceivedGifts()
+  const index = all.findIndex(item => item.id === id)
+  if (index < 0) return null
+  const current = all[index]
+  addLocalWishlistItem(current.receiver_user_id, current.product_id)
+  const next = { ...current, confirmed: false, rejected: true }
   all[index] = next
   writeJson(RECEIVED_GIFTS_KEY, all)
   return next
@@ -342,6 +354,7 @@ export function markGiftGiven(input: {
       product_title: productTitle,
       product_id: input.product_id,
       received_gift_id: received.id,
+      receiver_user_id: receiverUserId,
     },
   })
 }

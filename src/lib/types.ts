@@ -184,6 +184,7 @@ export interface ReceivedGift {
   product: Product | null
   shopping_item_id: string | null
   confirmed: boolean
+  rejected?: boolean
   created_at: string
 }
 
