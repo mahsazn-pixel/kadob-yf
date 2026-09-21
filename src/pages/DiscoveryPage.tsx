@@ -4,7 +4,7 @@ import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, C
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, MyOccasion, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS, sortPeopleByNearestOccasion } from '../lib/types'
-import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson, getAllDisplayOccasionsForOwner, getDisplayOccasionsForPerson, getLocalOccasions } from '../lib/localStore'
+import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson, getAllDisplayOccasionsForOwner, getDisplayOccasionsForPerson, getLocalOccasions, setLocalWishlistHold } from '../lib/localStore'
 import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
@@ -44,6 +44,7 @@ export default function DiscoveryPage() {
   const [selectedPerson, setSelectedPerson] = useState<string | null>(personId)
   const [budgetMin, setBudgetMin] = useState(500000)
   const [budgetMax, setBudgetMax] = useState(5000000)
+  const [ageRange, setAgeRange] = useState<string | null>(null)
   const [step, setStep] = useState<'select' | 'budget' | 'discovery' | 'review' | 'failed' | 'success'>('select')
   const [session, setSession] = useState<SessionData | null>(null)
   const [currentCards, setCurrentCards] = useState<Card[]>([])
@@ -70,6 +71,12 @@ export default function DiscoveryPage() {
   const [peopleVisibleCount, setPeopleVisibleCount] = useState(10)
   const isLocalUser = !!user?.id.startsWith('local-')
   const PEOPLE_PAGE_SIZE = 10
+  const AGE_RANGE_OPTIONS = [
+    { id: 'under3', label: 'زیر ۳ سال' },
+    { id: '4to7', label: '۴ تا ۷ سال' },
+    { id: '8to15', label: '۸ تا ۱۵ سال' },
+    { id: 'over15', label: 'بالای ۱۵ سال' },
+  ]
 
   useEffect(() => {
     if (!user) return
@@ -171,6 +178,7 @@ export default function DiscoveryPage() {
           receiver_id: receiverId,
           budget_min: budgetMin,
           budget_max: budgetMax,
+          age_range: ageRange,
           occasion_id: occasionId,
         }),
       })
@@ -194,6 +202,24 @@ export default function DiscoveryPage() {
       startLocalSession()
     } finally {
       setLoading(false)
+    }
+  }
+
+  const markWishlistReserved = async (receiverId: string, productId: string) => {
+    if (!user) return
+    const receiver = people.find(p => p.id === receiverId)
+    const ownerUserId = receiver?.linked_user_id
+      || (receiver?.name === 'خودم' ? receiver.owner_user_id : null)
+    if (!ownerUserId) return
+    setLocalWishlistHold(ownerUserId, productId, user.id)
+    if (user.id.startsWith('local-')) return
+    try {
+      await supabase.from('wishlist_items').update({
+        reserved_by_user_id: user.id,
+        reserved_at: new Date().toISOString(),
+      }).eq('owner_user_id', ownerUserId).eq('product_id', productId)
+    } catch {
+      // local fallback
     }
   }
 
@@ -234,6 +260,7 @@ export default function DiscoveryPage() {
           product_id: productId,
           session_id: session?.session_id,
         })
+        void markWishlistReserved(selectedPerson, productId)
       }
       setShopUrl(product?.shop_url || null)
       setStep('success')
@@ -401,6 +428,7 @@ export default function DiscoveryPage() {
           product_id: productId,
           session_id: session?.session_id,
         })
+        void markWishlistReserved(receiverId, productId)
       }
       setShopUrl(getCatalogProduct(productId)?.shop_url || null)
       setStep('success')
@@ -433,6 +461,7 @@ export default function DiscoveryPage() {
             product_id: productId,
             session_id: session.session_id,
           })
+          void markWishlistReserved(receiverId, productId)
         }
         setShopUrl(data.data.shop_url)
         setStep('success')
@@ -577,6 +606,7 @@ export default function DiscoveryPage() {
           product_id: productId,
           session_id: session.session_id,
         })
+        void markWishlistReserved(selectedPerson, productId)
       }
       setShopUrl(getCatalogProduct(productId)?.shop_url || null)
       setStep('success')
@@ -602,6 +632,15 @@ export default function DiscoveryPage() {
       })
       const data = await res.json()
       if (data.success) {
+        if (user && selectedPerson) {
+          createLocalShoppingItem({
+            user_id: user.id,
+            receiver_id: selectedPerson,
+            product_id: productId,
+            session_id: session.session_id,
+          })
+          void markWishlistReserved(selectedPerson, productId)
+        }
         setShopUrl(data.data.shop_url)
         setStep('success')
       } else {
@@ -636,12 +675,8 @@ export default function DiscoveryPage() {
             disabled={loading}
             onSpin={() => {
               if (wheelSpinning || loading) return
-              setWheelSpinning(true)
               setError('')
-              window.setTimeout(() => {
-                void startSession()
-                setWheelSpinning(false)
-              }, 1600)
+              setStep('budget')
             }}
           />
           {people.length === 0 ? (
@@ -717,52 +752,67 @@ export default function DiscoveryPage() {
 
       {step === 'budget' && (
         <div className="px-4 py-4 animate-fade-in">
-          <h2 className="font-bold text-stone-800 mb-1">بودجه</h2>
-          <p className="text-sm text-stone-500 mb-4">بازه قیمت هدیه را مشخص کنید</p>
+          {wheelSpinning ? (
+            <GiftWheel spinning disabled onSpin={() => undefined} />
+          ) : (
+            <>
+              <h2 className="font-bold text-stone-800 mb-1">بودجه</h2>
+              <p className="text-sm text-stone-500 mb-4">بازه قیمت هدیه را مشخص کنید</p>
 
-          <div className="bg-white rounded-2xl p-5 border border-stone-100 space-y-4">
-            <div>
-              <label className="text-sm text-stone-600 mb-1 block">حداقل قیمت (تومان)</label>
-              <input
-                type="number"
-                value={budgetMin}
-                onChange={(e) => setBudgetMin(Number(e.target.value))}
-                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-              />
-            </div>
-            <div>
-              <label className="text-sm text-stone-600 mb-1 block">حداکثر قیمت (تومان)</label>
-              <input
-                type="number"
-                value={budgetMax}
-                onChange={(e) => setBudgetMax(Number(e.target.value))}
-                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-              />
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {[
-                { min: 500000, max: 2000000, label: '۵۰۰ هزار - ۲ میلیون' },
-                { min: 1000000, max: 5000000, label: '۱ - ۵ میلیون' },
-                { min: 2000000, max: 10000000, label: '۲ - ۱۰ میلیون' },
-              ].map(preset => (
-                <button
-                  key={preset.label}
-                  onClick={() => { setBudgetMin(preset.min); setBudgetMax(preset.max) }}
-                  className="px-3 py-2 rounded-lg bg-stone-100 text-stone-600 text-xs font-medium hover:bg-primary-50 hover:text-primary-600 transition-colors"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </div>
+              <div className="bg-white rounded-2xl p-5 border border-stone-100 space-y-4">
+                <div>
+                  <label className="text-sm text-stone-600 mb-1 block">حداقل قیمت (تومان)</label>
+                  <input
+                    type="number"
+                    value={budgetMin}
+                    onChange={(e) => setBudgetMin(Number(e.target.value))}
+                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-stone-600 mb-1 block">حداکثر قیمت (تومان)</label>
+                  <input
+                    type="number"
+                    value={budgetMax}
+                    onChange={(e) => setBudgetMax(Number(e.target.value))}
+                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                  />
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {AGE_RANGE_OPTIONS.map(option => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setAgeRange(option.id === ageRange ? null : option.id)}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        ageRange === option.id
+                          ? 'bg-primary-100 text-primary-700'
+                          : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-600'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          <button
-            onClick={() => { void startSession() }}
-            disabled={loading || budgetMax <= budgetMin}
-            className="w-full mt-4 py-3.5 rounded-xl bg-primary-500 text-white font-semibold shadow-lg shadow-primary-500/30 hover:bg-primary-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-          >
-            {loading ? <Loader2 size={20} className="animate-spin" /> : 'شروع کشف هدیه'}
-          </button>
+              <button
+                onClick={() => {
+                  if (loading || budgetMax <= budgetMin || wheelSpinning) return
+                  setError('')
+                  setWheelSpinning(true)
+                  window.setTimeout(() => {
+                    void startSession()
+                    setWheelSpinning(false)
+                  }, 1600)
+                }}
+                disabled={loading || budgetMax <= budgetMin}
+                className="w-full mt-4 py-3.5 rounded-xl bg-primary-500 text-white font-semibold shadow-lg shadow-primary-500/30 hover:bg-primary-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 size={20} className="animate-spin" /> : 'شروع کشف هدیه'}
+              </button>
+            </>
+          )}
         </div>
       )}
 

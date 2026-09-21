@@ -943,7 +943,7 @@ export default function PersonDetailPage() {
               )}
             </div>
             {visitorView && !showAllWishlist ? (
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-4 gap-2 items-start">
                 {visibleWishlist.map((item, idx) => {
                   const pid = productKey(item)
                   const taken = heldByOther(item)
@@ -951,19 +951,20 @@ export default function PersonDetailPage() {
                     <button
                       key={pid || idx}
                       type="button"
-                    onClick={() => {
-                      if (!item.product) return
-                      setPreviewSource('received')
-                      setPreviewProduct(item.product)
-                    }}
-                      className="relative aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
+                      onClick={() => {
+                        if (!item.product) return
+                        setPreviewSource('wishlist')
+                        setPreviewProduct(item.product)
+                      }}
+                      className="relative block w-full min-w-0 overflow-hidden rounded-xl border border-stone-100 bg-stone-100"
                     >
+                      <span className="block pt-[100%]" />
                       {item.product?.image_url ? (
-                        <img src={item.product.image_url} alt="" className="w-full h-full object-cover" />
+                        <img src={item.product.image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center">
+                        <span className="absolute inset-0 flex items-center justify-center">
                           <Heart size={16} className="text-stone-300" />
-                        </div>
+                        </span>
                       )}
                       {taken && (
                         <span className="absolute inset-x-0 bottom-0 bg-black/65 text-white text-[10px] py-0.5">رزرو شده</span>
@@ -982,11 +983,11 @@ export default function PersonDetailPage() {
                     <div key={pid || idx} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
                       <button
                         type="button"
-                      onClick={() => {
-                        if (!item.product) return
-                        setPreviewSource('wishlist')
-                        setPreviewProduct(item.product)
-                      }}
+                        onClick={() => {
+                          if (!item.product) return
+                          setPreviewSource('wishlist')
+                          setPreviewProduct(item.product)
+                        }}
                         className="w-full flex items-center gap-3 p-3 text-right"
                       >
                         {item.product?.image_url && (
@@ -1088,21 +1089,26 @@ export default function PersonDetailPage() {
                 </button>
               )}
             </div>
-            {visitorView ? (
-              <div className="grid grid-cols-4 gap-2">
+            {visitorView && !showAllReceived ? (
+              <div className="grid grid-cols-4 gap-2 items-start">
                 {visibleReceived.map(item => (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => item.product && setPreviewProduct(item.product)}
-                    className="aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
+                    onClick={() => {
+                      if (!item.product) return
+                      setPreviewSource('received')
+                      setPreviewProduct(item.product)
+                    }}
+                    className="relative block w-full min-w-0 overflow-hidden rounded-xl border border-stone-100 bg-stone-100"
                   >
+                    <span className="block pt-[100%]" />
                     {item.product?.image_url ? (
-                      <img src={item.product.image_url} alt="" className="w-full h-full object-cover" />
+                      <img src={item.product.image_url} alt="" className="absolute inset-0 h-full w-full object-cover" />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center">
+                      <span className="absolute inset-0 flex items-center justify-center">
                         <Gift size={16} className="text-stone-300" />
-                      </div>
+                      </span>
                     )}
                   </button>
                 ))}
@@ -1110,20 +1116,29 @@ export default function PersonDetailPage() {
             ) : (
               <div className="space-y-2">
                 {receivedGifts.map(item => (
-                  <div key={item.id} className="rounded-xl bg-white border border-stone-100 overflow-hidden">
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      if (!item.product) return
+                      setPreviewSource('received')
+                      setPreviewProduct(item.product)
+                    }}
+                    className="w-full rounded-xl bg-white border border-stone-100 overflow-hidden text-right"
+                  >
                     <div className="flex items-center gap-3 p-3">
                       {item.product?.image_url && (
                         <img src={item.product.image_url} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
                       )}
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title}</p>
+                        <p className="text-sm font-medium text-stone-800 truncate">{item.product?.title || 'هدیه'}</p>
                         <p className="text-xs text-stone-500">از طرف {item.giver_name}</p>
                       </div>
                       {item.confirmed && (
                         <span className="text-[11px] font-medium text-success-600 shrink-0">تأیید شده</span>
                       )}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -1140,7 +1155,7 @@ export default function PersonDetailPage() {
       )}
 
       {previewProduct && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-6" onClick={() => setPreviewProduct(null)}>
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-6" onClick={() => { setPreviewProduct(null); setPreviewSource(null) }}>
           <div
             className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
@@ -1155,7 +1170,7 @@ export default function PersonDetailPage() {
               )}
               <button
                 type="button"
-                onClick={() => setPreviewProduct(null)}
+                onClick={() => { setPreviewProduct(null); setPreviewSource(null) }}
                 className="absolute top-3 left-3 w-9 h-9 rounded-full bg-neutral-900/80 text-white flex items-center justify-center"
               >
                 <X size={18} />
