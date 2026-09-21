@@ -1,4 +1,4 @@
-import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus, Notification, ReceivedGift, sameMonthDay } from './types'
+import { ClosePerson, Occasion, Profile, Product, ShoppingListItem, WishlistItem, WishlistVisibility, MyOccasion, MyOccasionVisibility, Greeting, GreetingStatus, Notification, ReceivedGift, sameMonthDay, wishlistVisibleTo } from './types'
 import { getCatalogProduct } from './catalog'
 
 const PEOPLE_KEY = 'kadoba_local_people'
@@ -144,6 +144,70 @@ export function getLocalShoppingItems(userId: string): ShoppingListItem[] {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
+export interface GiftHold {
+  id: string
+  product_id: string
+  user_id: string
+  status: string
+}
+
+export function getLocalGiftHoldsForWishlistOwner(ownerUserId: string): GiftHold[] {
+  const people = getAllLocalPeople()
+  const receiverIds = new Set(
+    people
+      .filter(p => p.linked_user_id === ownerUserId || (p.name === 'خودم' && p.owner_user_id === ownerUserId))
+      .map(p => p.id),
+  )
+  const holds: GiftHold[] = []
+  const seen = new Set<string>()
+  for (const item of getAllLocalShopping()) {
+    if (!receiverIds.has(item.receiver_id)) continue
+    if (item.status !== 'reserved' && item.status !== 'purchased') continue
+    if (seen.has(item.product_id)) continue
+    seen.add(item.product_id)
+    holds.push({
+      id: item.id,
+      product_id: item.product_id,
+      user_id: item.user_id,
+      status: item.status,
+    })
+  }
+  return holds
+}
+
+function receiverOwnerUserId(receiverId: string): string | null {
+  const receiver = getAllLocalPeople().find(p => p.id === receiverId)
+  if (!receiver) return null
+  return receiver.linked_user_id || (receiver.name === 'خودم' ? receiver.owner_user_id : null)
+}
+
+export function setLocalWishlistHold(ownerUserId: string, productId: string, reservedByUserId: string | null) {
+  const all = getAllLocalWishlist()
+  let changed = false
+  const next = all.map(item => {
+    if (item.owner_user_id !== ownerUserId || item.product_id !== productId) return item
+    if ((item.reserved_by_user_id || null) === reservedByUserId) return item
+    changed = true
+    return { ...item, reserved_by_user_id: reservedByUserId }
+  })
+  if (changed) writeJson(WISHLIST_KEY, next)
+}
+
+function syncWishlistHoldFromShopping(item: ShoppingListItem, clear = false) {
+  const ownerUserId = receiverOwnerUserId(item.receiver_id)
+  if (!ownerUserId) return
+  if (clear || item.status === 'gifted') {
+    const current = getAllLocalWishlist().find(w => w.owner_user_id === ownerUserId && w.product_id === item.product_id)
+    if (current?.reserved_by_user_id === item.user_id) {
+      setLocalWishlistHold(ownerUserId, item.product_id, null)
+    }
+    return
+  }
+  if (item.status === 'reserved' || item.status === 'purchased') {
+    setLocalWishlistHold(ownerUserId, item.product_id, item.user_id)
+  }
+}
+
 export function updateLocalShoppingItem(id: string, updates: Partial<ShoppingListItem>): ShoppingListItem | null {
   const all = getAllLocalShopping()
   const index = all.findIndex(item => item.id === id)
@@ -151,11 +215,14 @@ export function updateLocalShoppingItem(id: string, updates: Partial<ShoppingLis
   const next = { ...all[index], ...updates, id: all[index].id, updated_at: new Date().toISOString() }
   all[index] = next
   writeJson(SHOPPING_KEY, all)
+  syncWishlistHoldFromShopping(next)
   return next
 }
 
 export function deleteLocalShoppingItem(id: string) {
+  const current = getAllLocalShopping().find(item => item.id === id)
   writeJson(SHOPPING_KEY, getAllLocalShopping().filter(item => item.id !== id))
+  if (current) syncWishlistHoldFromShopping(current, true)
 }
 
 export function createLocalShoppingItem(input: {
@@ -201,6 +268,7 @@ export function createLocalShoppingItem(input: {
     updated_at: now,
   }
   writeJson(SHOPPING_KEY, [item, ...getAllLocalShopping()])
+  syncWishlistHoldFromShopping(item)
   return item
 }
 
@@ -213,6 +281,20 @@ export function removeLocalWishlistItemByProduct(ownerUserId: string, productId:
     WISHLIST_KEY,
     getAllLocalWishlist().filter(item => !(item.owner_user_id === ownerUserId && item.product_id === productId)),
   )
+}
+
+export function removeLocalWishlistItem(id: string) {
+  writeJson(WISHLIST_KEY, getAllLocalWishlist().filter(item => item.id !== id))
+}
+
+export function updateLocalWishlistVisibility(id: string, visibility: WishlistVisibility): WishlistItem | null {
+  const all = getAllLocalWishlist()
+  const index = all.findIndex(item => item.id === id)
+  if (index < 0) return null
+  const next = { ...all[index], visibility }
+  all[index] = next
+  writeJson(WISHLIST_KEY, all)
+  return next
 }
 
 function getAllLocalNotifications(): Notification[] {
@@ -360,9 +442,19 @@ export function markGiftGiven(input: {
 }
 
 export function getLocalWishlist(userId: string): WishlistItem[] {
+  const holds = getLocalGiftHoldsForWishlistOwner(userId)
+  const holdByProduct = new Map(holds.map(h => [h.product_id, h.user_id]))
   return getAllLocalWishlist()
     .filter(item => item.owner_user_id === userId)
-    .map(item => ({ ...item, product: item.product || getCatalogProduct(item.product_id) || null }))
+    .map(item => ({
+      ...item,
+      product: item.product || getCatalogProduct(item.product_id) || null,
+      reserved_by_user_id: item.reserved_by_user_id || holdByProduct.get(item.product_id) || null,
+    }))
+}
+
+export function getVisibleLocalWishlist(ownerUserId: string, closeness: string): WishlistItem[] {
+  return getLocalWishlist(ownerUserId).filter(item => wishlistVisibleTo(item.visibility, closeness))
 }
 
 export function getAllLocalMyOccasions(): MyOccasion[] {
@@ -530,7 +622,7 @@ export function updateLocalGreetingStatus(id: string, status: GreetingStatus): G
   return next
 }
 
-export function addLocalWishlistItem(userId: string, productId: string, visibility = 'public'): WishlistItem | null {
+export function addLocalWishlistItem(userId: string, productId: string, visibility: WishlistVisibility = 'public'): WishlistItem | null {
   const existing = getAllLocalWishlist()
   if (existing.some(item => item.owner_user_id === userId && item.product_id === productId)) return null
   const item: WishlistItem = {
@@ -561,7 +653,7 @@ function upsertLocalShoppingItem(item: ShoppingListItem) {
 
 function seedDemoWishlist() {
   const existing = getAllLocalWishlist()
-  const specs: { id: string; productId: string; visibility: string }[] = [
+  const specs: { id: string; productId: string; visibility: WishlistVisibility }[] = [
     { id: 'demo-wish-1', productId: 'p005', visibility: 'public' },
     { id: 'demo-wish-2', productId: 'p009', visibility: 'public' },
     { id: 'demo-wish-3', productId: 'p027', visibility: 'private' },

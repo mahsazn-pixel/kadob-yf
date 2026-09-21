@@ -117,13 +117,24 @@ export interface Category {
   icon: string | null
 }
 
+export type WishlistVisibility = 'public' | 'private'
+
 export interface WishlistItem {
   id: string
   owner_user_id: string
   product_id: string
   product: Product | null
-  visibility: string
+  visibility: WishlistVisibility
+  reserved_by_user_id?: string | null
   created_at: string
+}
+
+export function nextWishlistVisibility(visibility: string): WishlistVisibility {
+  return visibility === 'public' ? 'private' : 'public'
+}
+
+export function wishlistVisibleTo(visibility: string, closeness: string): boolean {
+  return visibility === 'public' || closeness === 'very_close'
 }
 
 export interface DiscoverySession {
@@ -211,7 +222,7 @@ export const REACTION_COLORS: Record<ReactionType, string> = {
   the_one: 'bg-primary-500',
 }
 
-export const REACTION_ORDER: ReactionType[] = ['no', 'good', 'great', 'the_one']
+export const REACTION_ORDER: ReactionType[] = ['no', 'good', 'the_one']
 
 export function formatPrice(amount: number): string {
   return new Intl.NumberFormat('fa-IR').format(amount) + ' تومان'

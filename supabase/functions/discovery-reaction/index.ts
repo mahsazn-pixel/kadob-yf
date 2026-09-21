@@ -109,7 +109,22 @@ Deno.serve(async (req: Request) => {
         reserved_at: new Date().toISOString(),
       });
 
-      if (!shopError) reservationCreated = true;
+      if (!shopError) {
+        reservationCreated = true;
+        const { data: receiver } = await supabase
+          .from("close_people")
+          .select("linked_user_id, name, owner_user_id")
+          .eq("id", session.receiver_id)
+          .maybeSingle();
+        const ownerUserId = receiver?.linked_user_id
+          || (receiver?.name === "خودم" ? receiver.owner_user_id : null);
+        if (ownerUserId) {
+          await supabase.from("wishlist_items").update({
+            reserved_by_user_id: userId,
+            reserved_at: new Date().toISOString(),
+          }).eq("owner_user_id", ownerUserId).eq("product_id", body.product_id);
+        }
+      }
 
       await supabase
         .from("discovery_sessions")

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Calendar, Loader2, Plus, Trash2, Globe, Lock, X, Edit2 } from 'lucide-react'
+import { Calendar, Loader2, Plus, Trash2, Eye, EyeOff, X, Edit2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import {
@@ -206,10 +206,21 @@ export default function MyOccasionsPage() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => toggleVisibility(item)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-stone-50 text-xs text-stone-600"
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium hover:bg-stone-100 transition-colors"
+                    title={item.visibility === 'public' ? 'قابل مشاهده برای همه' : 'فقط نزدیکان صمیمی'}
+                    aria-label={item.visibility === 'public' ? 'عمومی؛ برای خصوصی کردن بزنید' : 'خصوصی؛ برای عمومی کردن بزنید'}
                   >
-                    {item.visibility === 'public' ? <Globe size={12} /> : <Lock size={12} />}
-                    {item.visibility === 'public' ? 'همه' : 'خیلی نزدیک'}
+                    {item.visibility === 'public' ? (
+                      <>
+                        <Eye size={14} className="text-success-500" />
+                        <span className="text-success-600">همه</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff size={14} className="text-stone-400" />
+                        <span className="text-stone-500">صمیمی</span>
+                      </>
+                    )}
                   </button>
                   <button
                     onClick={() => startEdit(item)}
@@ -277,7 +288,7 @@ export default function MyOccasionsPage() {
                       visibility === 'very_close' ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
                     }`}
                   >
-                    افراد خیلی نزدیک
+                    نزدیکان صمیمی
                   </button>
                 </div>
               </div>

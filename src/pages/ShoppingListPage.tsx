@@ -4,7 +4,7 @@ import { ShoppingBag, Loader2, Check, Gift, X, ExternalLink } from 'lucide-react
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ShoppingListItem, formatPrice } from '../lib/types'
-import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem, markGiftGiven } from '../lib/localStore'
+import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem, markGiftGiven, setLocalWishlistHold } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -90,7 +90,23 @@ export default function ShoppingListPage() {
 
   const cancelReservation = async (id: string) => {
     setUpdating(id)
+    const current = items.find(item => item.id === id)
     deleteLocalShoppingItem(id)
+    const receiverUserId = current?.receiver?.linked_user_id
+      || (current?.receiver?.name === 'خودم' ? current.receiver.owner_user_id : null)
+    if (current && receiverUserId) {
+      setLocalWishlistHold(receiverUserId, current.product_id, null)
+      if (!user!.id.startsWith('local-')) {
+        try {
+          await supabase.from('wishlist_items').update({
+            reserved_by_user_id: null,
+            reserved_at: null,
+          }).eq('owner_user_id', receiverUserId).eq('product_id', current.product_id)
+        } catch {
+          // local fallback
+        }
+      }
+    }
     if (!user!.id.startsWith('local-')) {
       try {
         await supabase.from('shopping_list_items').delete().eq('id', id)
@@ -113,7 +129,7 @@ export default function ShoppingListPage() {
 
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
-      <PageHeader title="لیست خرید" subtitle={`${items.length} کادو`} />
+      <PageHeader title="لیست خرید" subtitle={`${items.length} کادو`} back />
 
       <div className="px-4 py-3">
         <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">

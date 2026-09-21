@@ -6,7 +6,7 @@ import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, Product, MyOccasion, Greeting, ReceivedGift, CLOSENESS_OPTIONS, closenessLabel, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import GreetingModal from '../components/GreetingModal'
-import { getAllLocalPeople, getLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, createLocalPerson, findLocalProfileByPhone, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven, getLocalReceivedGifts, addLocalWishlistItem } from '../lib/localStore'
+import { getAllLocalPeople, getLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, createLocalPerson, findLocalProfileByPhone, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getVisibleLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven, getLocalReceivedGifts, addLocalWishlistItem, setLocalWishlistHold } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import { sendGiftInvite } from '../lib/invite'
@@ -17,7 +17,7 @@ export default function PersonDetailPage() {
   const navigate = useNavigate()
   const [person, setPerson] = useState<ClosePerson | null>(null)
   const [occasions, setOccasions] = useState<Occasion[]>([])
-  const [wishlistItems, setWishlistItems] = useState<{ id?: string; product_id?: string; product: Product | null; visibility: string }[]>([])
+  const [wishlistItems, setWishlistItems] = useState<{ id?: string; product_id?: string; product: Product | null; visibility: string; reserved_by_user_id?: string | null }[]>([])
   const [shopStatus, setShopStatus] = useState<Record<string, { id: string; status: string }>>({})
   const [updatingProduct, setUpdatingProduct] = useState<string | null>(null)
   const [linkedProfile, setLinkedProfile] = useState<{ name: string | null; avatar_url: string | null; birth_date: string | null } | null>(null)
@@ -108,15 +108,13 @@ export default function PersonDetailPage() {
       if (personRec?.linked_user_id) {
         const linked = getLocalProfile(personRec.linked_user_id)
         setLinkedProfile(linked ? { name: linked.name, avatar_url: linked.avatar_url, birth_date: linked.birth_date } : null)
-        const closeness = personRec.closeness
-        const visibleWish = getLocalWishlist(personRec.linked_user_id).filter(item => (
-          item.visibility === 'public' || closeness === 'very_close'
-        ))
+        const visibleWish = getVisibleLocalWishlist(personRec.linked_user_id, personRec.closeness)
         setWishlistItems(visibleWish.map(item => ({
           id: item.id,
           product_id: item.product_id,
           product: asProduct(item.product),
           visibility: item.visibility,
+          reserved_by_user_id: item.reserved_by_user_id || null,
         })))
         setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
       } else {
@@ -173,17 +171,19 @@ export default function PersonDetailPage() {
           setPerson({ ...personRec, birth_date: profileData.birth_date })
         }
 
+        const wishVisibilities = personRec.closeness === 'very_close' ? ['public', 'private'] : ['public']
         const { data: wishData } = await supabase
           .from('wishlist_items')
           .select('*, product:products(*)')
           .eq('owner_user_id', personRec.linked_user_id)
-          .in('visibility', ['public', 'private'])
+          .in('visibility', wishVisibilities)
           .order('created_at', { ascending: false })
-        setWishlistItems(((wishData || []) as { id?: string; product_id?: string; product: Product | Product[] | null; visibility: string }[]).map(item => ({
+        setWishlistItems(((wishData || []) as { id?: string; product_id?: string; product: Product | Product[] | null; visibility: string; reserved_by_user_id?: string | null }[]).map(item => ({
           id: item.id,
           product_id: item.product_id,
           product: asProduct(item.product),
           visibility: item.visibility,
+          reserved_by_user_id: item.reserved_by_user_id || null,
         })))
         setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
         const visibilities = personRec.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
@@ -386,6 +386,28 @@ export default function PersonDetailPage() {
           status,
         })
       }
+      const receiverUserId = targetPerson.linked_user_id
+        || (targetPerson.name === 'خودم' ? targetPerson.owner_user_id : null)
+      if (receiverUserId && (status === 'reserved' || status === 'purchased')) {
+        setLocalWishlistHold(receiverUserId, productId, user.id)
+        if (trackOnProfile) {
+          setWishlistItems(prev => prev.map(w => {
+            const keys = new Set(wishlistKeys(w))
+            if (!keys.has(productId) && !(product?.id && keys.has(product.id))) return w
+            return { ...w, reserved_by_user_id: user.id }
+          }))
+        }
+        if (!user.id.startsWith('local-')) {
+          try {
+            await supabase.from('wishlist_items').update({
+              reserved_by_user_id: user.id,
+              reserved_at: now,
+            }).eq('owner_user_id', receiverUserId).eq('product_id', productId)
+          } catch {
+            // local fallback
+          }
+        }
+      }
       if (status === 'gifted') {
         updateLocalShoppingItem(localItem.id, {
           status: 'gifted',
@@ -402,8 +424,6 @@ export default function PersonDetailPage() {
           product: product || localItem.product,
           shopping_item_id: localItem.id,
         })
-        const receiverUserId = targetPerson.linked_user_id
-          || (targetPerson.name === 'خودم' ? targetPerson.owner_user_id : null)
         if (!user.id.startsWith('local-') && receiverUserId) {
           try {
             let query = supabase.from('wishlist_items').delete().eq('owner_user_id', receiverUserId).eq('product_id', productId)
@@ -679,6 +699,13 @@ export default function PersonDetailPage() {
   const isSelf = person.name === 'خودم'
   const isBirthdayWindow = birthdayDays !== null && birthdayDays >= -1 && birthdayDays <= 1 && !isSelf
   const visitorView = !isSelf
+  const heldByOther = (item: { reserved_by_user_id?: string | null }) => (
+    visitorView && !!item.reserved_by_user_id && item.reserved_by_user_id !== user?.id
+  )
+  const previewHeldByOther = !!(previewProduct && wishlistItems.some(w => (
+    (w.product_id === previewProduct.id || w.product?.id === previewProduct.id)
+    && heldByOther(w)
+  )))
   const visibleOccasions = visitorView && !showAllOccasions ? occasions.slice(-3) : occasions
   const visibleGreetings = visitorView && !showAllGreetings ? approvedGreetings.slice(-3) : approvedGreetings
   const visibleWishlist = visitorView && !showAllWishlist ? wishlistItems.slice(-4) : wishlistItems
@@ -919,6 +946,7 @@ export default function PersonDetailPage() {
               <div className="grid grid-cols-4 gap-2">
                 {visibleWishlist.map((item, idx) => {
                   const pid = productKey(item)
+                  const taken = heldByOther(item)
                   return (
                     <button
                       key={pid || idx}
@@ -928,7 +956,7 @@ export default function PersonDetailPage() {
                       setPreviewSource('received')
                       setPreviewProduct(item.product)
                     }}
-                      className="aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
+                      className="relative aspect-square rounded-xl overflow-hidden bg-stone-100 border border-stone-100"
                     >
                       {item.product?.image_url ? (
                         <img src={item.product.image_url} alt="" className="w-full h-full object-cover" />
@@ -936,6 +964,9 @@ export default function PersonDetailPage() {
                         <div className="w-full h-full flex items-center justify-center">
                           <Heart size={16} className="text-stone-300" />
                         </div>
+                      )}
+                      {taken && (
+                        <span className="absolute inset-x-0 bottom-0 bg-black/65 text-white text-[10px] py-0.5">رزرو شده</span>
                       )}
                     </button>
                   )
@@ -966,6 +997,9 @@ export default function PersonDetailPage() {
                           <p className="text-xs text-stone-500">
                             {item.product ? formatPrice(item.product.price_amount) : ''}
                           </p>
+                          {heldByOther(item) && (
+                            <p className="text-[11px] text-stone-500 mt-0.5">رزرو شده</p>
+                          )}
                         </div>
                         {busy && <Loader2 size={16} className="animate-spin text-stone-400 shrink-0" />}
                       </button>
@@ -981,7 +1015,11 @@ export default function PersonDetailPage() {
                               <ShoppingBag size={14} /> خرید
                             </a>
                           )}
-                          {current?.status === 'gifted' ? (
+                          {heldByOther(item) ? (
+                            <div className="flex-1 py-2 text-xs font-medium text-stone-500 flex items-center justify-center gap-1 border-r border-stone-100">
+                              رزرو شده
+                            </div>
+                          ) : current?.status === 'gifted' ? (
                             <div className="flex-1 py-2 text-xs font-medium text-success-600 flex items-center justify-center gap-1 border-r border-stone-100">
                               <Gift size={14} /> هدیه داده شد
                             </div>
@@ -1138,7 +1176,11 @@ export default function PersonDetailPage() {
                     <ShoppingBag size={14} /> خرید
                   </a>
                 )}
-                {previewShopStatus?.status === 'gifted' ? (
+                {previewHeldByOther ? (
+                  <div className="py-2.5 rounded-xl bg-stone-100 text-stone-500 text-xs font-medium flex items-center justify-center gap-1">
+                    رزرو شده
+                  </div>
+                ) : previewShopStatus?.status === 'gifted' ? (
                   <div className="py-2.5 rounded-xl bg-success-50 text-success-600 text-xs font-medium flex items-center justify-center gap-1">
                     <Gift size={14} /> هدیه داده شد
                   </div>

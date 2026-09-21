@@ -3,8 +3,8 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Plus, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ClosePerson, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS } from '../lib/types'
-import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson } from '../lib/localStore'
+import { ClosePerson, Occasion, MyOccasion, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS, sortPeopleByNearestOccasion } from '../lib/types'
+import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson, getAllDisplayOccasionsForOwner, getDisplayOccasionsForPerson, getLocalOccasions } from '../lib/localStore'
 import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
@@ -67,19 +67,23 @@ export default function DiscoveryPage() {
   const [newReceiverCloseness, setNewReceiverCloseness] = useState('very_close')
   const [sendInvite, setSendInvite] = useState(false)
   const [savingReceiver, setSavingReceiver] = useState(false)
+  const [peopleVisibleCount, setPeopleVisibleCount] = useState(10)
   const isLocalUser = !!user?.id.startsWith('local-')
+  const PEOPLE_PAGE_SIZE = 10
 
   useEffect(() => {
     if (!user) return
-    const applyPeople = (list: ClosePerson[]) => {
-      setPeople(list)
+    const applyPeople = (list: ClosePerson[], occasions: Occasion[]) => {
+      setPeople(sortPeopleByNearestOccasion(list, occasions))
+      setPeopleVisibleCount(PEOPLE_PAGE_SIZE)
       if (personId) {
         setSelectedPerson(personId)
         setStep('budget')
       }
     }
     if (user.id.startsWith('local-')) {
-      applyPeople(getLocalPeople(user.id))
+      const list = getLocalPeople(user.id)
+      applyPeople(list, getAllDisplayOccasionsForOwner(user.id))
       return
     }
     void (async () => {
@@ -89,9 +93,37 @@ export default function DiscoveryPage() {
           .select('*')
           .eq('owner_user_id', user.id)
           .order('created_at', { ascending: false })
-        applyPeople(data && data.length > 0 ? data : getLocalPeople(user.id))
+        const list = (data && data.length > 0 ? data : getLocalPeople(user.id)) as ClosePerson[]
+        let occs: Occasion[] = getAllDisplayOccasionsForOwner(user.id)
+        if (list.length > 0) {
+          const { data: occData } = await supabase
+            .from('occasions')
+            .select('*')
+            .in('person_id', list.map(p => p.id))
+          const ownByPerson = new Map<string, Occasion[]>()
+          for (const o of (occData || []) as Occasion[]) {
+            const arr = ownByPerson.get(o.person_id) || []
+            arr.push(o)
+            ownByPerson.set(o.person_id, arr)
+          }
+          const linkedIds = list.map(p => p.linked_user_id).filter(Boolean) as string[]
+          let sharedAll: MyOccasion[] = []
+          if (linkedIds.length > 0) {
+            const { data: sharedData } = await supabase
+              .from('my_occasions')
+              .select('*')
+              .in('owner_user_id', linkedIds)
+            sharedAll = (sharedData || []) as MyOccasion[]
+          }
+          occs = list.flatMap(p => getDisplayOccasionsForPerson(p, {
+            own: ownByPerson.get(p.id) || getLocalOccasions(p.id),
+            shared: p.linked_user_id ? sharedAll.filter(s => s.owner_user_id === p.linked_user_id) : [],
+          }))
+        }
+        applyPeople(list, occs)
       } catch {
-        applyPeople(getLocalPeople(user.id))
+        const list = getLocalPeople(user.id)
+        applyPeople(list, getAllDisplayOccasionsForOwner(user.id))
       }
     })()
   }, [user, personId])
@@ -630,6 +662,7 @@ export default function DiscoveryPage() {
             (() => {
               const selfPerson = people.find(p => p.name === 'خودم')
               const others = people.filter(p => p.name !== 'خودم')
+              const visibleOthers = others.slice(0, peopleVisibleCount)
               const renderPerson = (person: ClosePerson, self: boolean) => (
                 <button
                   key={person.id}
@@ -663,7 +696,16 @@ export default function DiscoveryPage() {
                   )}
                   {others.length > 0 && (
                     <div className="space-y-2">
-                      {others.map(person => renderPerson(person, false))}
+                      {visibleOthers.map(person => renderPerson(person, false))}
+                      {others.length > peopleVisibleCount && (
+                        <button
+                          type="button"
+                          onClick={() => setPeopleVisibleCount(count => count + PEOPLE_PAGE_SIZE)}
+                          className="w-full py-3 rounded-2xl bg-stone-100 text-stone-700 text-sm font-medium hover:bg-stone-200 transition-colors"
+                        >
+                          دیدن موارد بیشتر
+                        </button>
+                      )}
                     </div>
                   )}
                 </>
@@ -759,7 +801,7 @@ export default function DiscoveryPage() {
             </div>
           </div>
 
-          <div className="w-full max-w-sm mt-6 grid grid-cols-4 gap-2">
+          <div className="w-full max-w-sm mt-6 grid grid-cols-3 gap-2">
             <ReactionButton
               icon={<X size={24} />}
               label={REACTION_LABELS.no}
@@ -772,14 +814,6 @@ export default function DiscoveryPage() {
               icon={<ThumbsUp size={24} />}
               label={REACTION_LABELS.good}
               onClick={() => handleReaction('good')}
-              color="bg-gradient-to-br from-primary-100 to-primary-200 text-primary-700 border-primary-300"
-              activeColor="bg-gradient-to-br from-primary-400 to-primary-500 text-white border-primary-500"
-              disabled={loading}
-            />
-            <ReactionButton
-              icon={<Sparkles size={24} />}
-              label={REACTION_LABELS.great}
-              onClick={() => handleReaction('great')}
               color="bg-gradient-to-br from-primary-100 to-primary-200 text-primary-700 border-primary-300"
               activeColor="bg-gradient-to-br from-primary-400 to-primary-500 text-white border-primary-500"
               disabled={loading}
@@ -869,14 +903,8 @@ export default function DiscoveryPage() {
                       <p className="font-medium text-stone-800 text-sm line-clamp-2">{item.product.title}</p>
                       <p className="text-sm text-primary-600 font-bold mt-1">{formatPrice(item.product.price_amount)}</p>
                       <div className="flex items-center gap-1 mt-1">
-                        {item.best_reaction === 'great' ? (
-                          <Sparkles size={14} className="text-success-500" />
-                        ) : (
-                          <ThumbsUp size={14} className="text-secondary-500" />
-                        )}
-                        <span className="text-xs text-stone-500">
-                          {item.best_reaction === 'great' ? 'عالی' : 'خوبه'}
-                        </span>
+                        <ThumbsUp size={14} className="text-secondary-500" />
+                        <span className="text-xs text-stone-500">خوبه</span>
                       </div>
                     </div>
                   </div>

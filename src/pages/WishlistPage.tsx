@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Heart, Loader2, Trash2, Eye, EyeOff } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { WishlistItem, formatPrice } from '../lib/types'
-import { getLocalWishlist } from '../lib/localStore'
+import { WishlistItem, formatPrice, nextWishlistVisibility } from '../lib/types'
+import { getLocalWishlist, removeLocalWishlistItem, updateLocalWishlistVisibility } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -42,14 +42,28 @@ export default function WishlistPage() {
   }
 
   const removeFromWishlist = async (id: string) => {
-    await supabase.from('wishlist_items').delete().eq('id', id)
+    removeLocalWishlistItem(id)
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('wishlist_items').delete().eq('id', id)
+      } catch {
+        // local fallback
+      }
+    }
     fetchItems()
   }
 
   const toggleVisibility = async (item: WishlistItem) => {
-    const newVisibility = item.visibility === 'public' ? 'private' : 'public'
-    await supabase.from('wishlist_items').update({ visibility: newVisibility }).eq('id', item.id)
-    fetchItems()
+    const newVisibility = nextWishlistVisibility(item.visibility)
+    updateLocalWishlistVisibility(item.id, newVisibility)
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, visibility: newVisibility } : i))
+    if (!user!.id.startsWith('local-')) {
+      try {
+        await supabase.from('wishlist_items').update({ visibility: newVisibility }).eq('id', item.id)
+      } catch {
+        // local fallback
+      }
+    }
   }
 
   return (
@@ -57,9 +71,13 @@ export default function WishlistPage() {
       <PageHeader
         title="لیست آرزوها"
         subtitle={`${items.length} مورد`}
+        back
       />
 
       <div className="px-4 py-4">
+        {items.length > 0 && !loading && (
+          <p className="text-xs text-stone-500 mb-3">با زدن آیکون چشم مشخص کنید همه ببینند یا فقط نزدیکان صمیمی</p>
+        )}
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 size={24} className="animate-spin text-stone-400" />
@@ -101,16 +119,23 @@ export default function WishlistPage() {
                       {ProductBody}
                     </a>
                   ) : ProductBody}
-                  <div className="px-2.5 pb-2.5 flex items-center justify-end gap-1">
+                  <div className="px-2.5 pb-2.5 flex items-center justify-between gap-1">
                     <button
                       onClick={() => toggleVisibility(item)}
-                      className="p-1.5 rounded-lg text-stone-400 hover:bg-stone-100 transition-colors"
-                      title={item.visibility === 'public' ? 'عمومی' : 'خصوصی'}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium hover:bg-stone-100 transition-colors"
+                      title={item.visibility === 'public' ? 'قابل مشاهده برای همه' : 'فقط نزدیکان صمیمی'}
+                      aria-label={item.visibility === 'public' ? 'عمومی؛ برای خصوصی کردن بزنید' : 'خصوصی؛ برای عمومی کردن بزنید'}
                     >
                       {item.visibility === 'public' ? (
-                        <Eye size={16} className="text-success-500" />
+                        <>
+                          <Eye size={14} className="text-success-500" />
+                          <span className="text-success-600">همه</span>
+                        </>
                       ) : (
-                        <EyeOff size={16} className="text-stone-400" />
+                        <>
+                          <EyeOff size={14} className="text-stone-400" />
+                          <span className="text-stone-500">صمیمی</span>
+                        </>
                       )}
                     </button>
                     <button
