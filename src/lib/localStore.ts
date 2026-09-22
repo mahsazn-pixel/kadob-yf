@@ -161,7 +161,7 @@ export function getLocalGiftHoldsForWishlistOwner(ownerUserId: string): GiftHold
   const holds: GiftHold[] = []
   const seen = new Set<string>()
   for (const item of getAllLocalShopping()) {
-    if (!receiverIds.has(item.receiver_id)) continue
+    if (!item.receiver_id || !receiverIds.has(item.receiver_id)) continue
     if (item.status !== 'reserved' && item.status !== 'purchased') continue
     if (seen.has(item.product_id)) continue
     seen.add(item.product_id)
@@ -175,7 +175,8 @@ export function getLocalGiftHoldsForWishlistOwner(ownerUserId: string): GiftHold
   return holds
 }
 
-function receiverOwnerUserId(receiverId: string): string | null {
+function receiverOwnerUserId(receiverId: string | null | undefined): string | null {
+  if (!receiverId) return null
   const receiver = getAllLocalPeople().find(p => p.id === receiverId)
   if (!receiver) return null
   return receiver.linked_user_id || (receiver.name === 'خودم' ? receiver.owner_user_id : null)
@@ -213,6 +214,9 @@ export function updateLocalShoppingItem(id: string, updates: Partial<ShoppingLis
   const index = all.findIndex(item => item.id === id)
   if (index < 0) return null
   const next = { ...all[index], ...updates, id: all[index].id, updated_at: new Date().toISOString() }
+  if ('receiver_id' in updates) {
+    next.receiver = next.receiver_id ? getAllLocalPeople().find(p => p.id === next.receiver_id) || null : null
+  }
   all[index] = next
   writeJson(SHOPPING_KEY, all)
   syncWishlistHoldFromShopping(next)
@@ -227,16 +231,17 @@ export function deleteLocalShoppingItem(id: string) {
 
 export function createLocalShoppingItem(input: {
   user_id: string
-  receiver_id: string
+  receiver_id?: string | null
   product_id: string
   session_id?: string | null
   product?: Product | null
   status?: string
 }): ShoppingListItem {
   const now = new Date().toISOString()
+  const receiverId = input.receiver_id || null
   const existing = getAllLocalShopping().find(item => (
     item.user_id === input.user_id
-    && item.receiver_id === input.receiver_id
+    && (item.receiver_id || null) === receiverId
     && item.product_id === input.product_id
     && item.status !== 'gifted'
   ))
@@ -250,12 +255,12 @@ export function createLocalShoppingItem(input: {
     }) || existing
   }
   const product = input.product || getCatalogProduct(input.product_id) || null
-  const receiver = getAllLocalPeople().find(p => p.id === input.receiver_id) || null
+  const receiver = receiverId ? getAllLocalPeople().find(p => p.id === receiverId) || null : null
   const status = input.status || 'reserved'
   const item: ShoppingListItem = {
     id: crypto.randomUUID(),
     user_id: input.user_id,
-    receiver_id: input.receiver_id,
+    receiver_id: receiverId,
     product_id: input.product_id,
     product,
     receiver,
@@ -348,8 +353,16 @@ export function getLocalReceivedGifts(userId: string): ReceivedGift[] {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
+export function getLocalReceivedGiftsForPerson(personId: string): ReceivedGift[] {
+  return getAllLocalReceivedGifts()
+    .filter(item => item.receiver_person_id === personId)
+    .map(item => ({ ...item, product: item.product || getCatalogProduct(item.product_id) || null }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+
 export function addLocalReceivedGift(input: {
-  receiver_user_id: string
+  receiver_user_id?: string | null
+  receiver_person_id?: string | null
   giver_user_id: string
   giver_name: string
   product_id: string
@@ -357,8 +370,11 @@ export function addLocalReceivedGift(input: {
   shopping_item_id?: string | null
 }): ReceivedGift {
   const existing = getAllLocalReceivedGifts().find(item => (
-    item.receiver_user_id === input.receiver_user_id
-    && item.product_id === input.product_id
+    item.product_id === input.product_id
+    && (
+      (input.receiver_user_id && item.receiver_user_id === input.receiver_user_id)
+      || (input.receiver_person_id && item.receiver_person_id === input.receiver_person_id)
+    )
   ))
   if (existing) {
     return {
@@ -368,7 +384,8 @@ export function addLocalReceivedGift(input: {
   }
   const item: ReceivedGift = {
     id: crypto.randomUUID(),
-    receiver_user_id: input.receiver_user_id,
+    receiver_user_id: input.receiver_user_id || null,
+    receiver_person_id: input.receiver_person_id || null,
     giver_user_id: input.giver_user_id,
     giver_name: input.giver_name,
     product_id: input.product_id,
@@ -396,7 +413,7 @@ export function rejectLocalReceivedGift(id: string): ReceivedGift | null {
   const index = all.findIndex(item => item.id === id)
   if (index < 0) return null
   const current = all[index]
-  addLocalWishlistItem(current.receiver_user_id, current.product_id)
+  if (current.receiver_user_id) addLocalWishlistItem(current.receiver_user_id, current.product_id)
   const next = { ...current, confirmed: false, rejected: true }
   all[index] = next
   writeJson(RECEIVED_GIFTS_KEY, all)
@@ -417,16 +434,18 @@ export function markGiftGiven(input: {
   const receiverUserId = input.receiver_user_id
     || receiverPerson?.linked_user_id
     || (receiverPerson?.name === 'خودم' ? receiverPerson.owner_user_id : null)
-  if (!receiverUserId) return null
-  removeLocalWishlistItemByProduct(receiverUserId, input.product_id)
+    || null
+  if (receiverUserId) removeLocalWishlistItemByProduct(receiverUserId, input.product_id)
   const received = addLocalReceivedGift({
     receiver_user_id: receiverUserId,
+    receiver_person_id: input.receiver_person_id,
     giver_user_id: input.giver_user_id,
     giver_name: input.giver_name,
     product_id: input.product_id,
     product: input.product,
     shopping_item_id: input.shopping_item_id,
   })
+  if (!receiverUserId) return null
   const productTitle = received.product?.title || input.product?.title || 'یک آیتم'
   return addLocalNotification({
     user_id: receiverUserId,
@@ -751,17 +770,18 @@ function seedDemoReceivedGifts() {
   const next = [...existing]
   for (const spec of specs) {
     if (next.some(item => item.id === spec.id || (item.receiver_user_id === DEMO_USER_ID && item.product_id === spec.productId))) continue
-    next.unshift({
-      id: spec.id,
-      receiver_user_id: DEMO_USER_ID,
-      giver_user_id: spec.giverUserId,
-      giver_name: spec.giverName,
-      product_id: spec.productId,
-      product: getCatalogProduct(spec.productId) || null,
-      shopping_item_id: null,
-      confirmed: spec.confirmed,
-      created_at: new Date().toISOString(),
-    })
+      next.unshift({
+        id: spec.id,
+        receiver_user_id: DEMO_USER_ID,
+        receiver_person_id: DEMO_PERSON_ID,
+        giver_user_id: spec.giverUserId,
+        giver_name: spec.giverName,
+        product_id: spec.productId,
+        product: getCatalogProduct(spec.productId) || null,
+        shopping_item_id: null,
+        confirmed: spec.confirmed,
+        created_at: new Date().toISOString(),
+      })
     changed = true
   }
   if (changed) writeJson(RECEIVED_GIFTS_KEY, next)

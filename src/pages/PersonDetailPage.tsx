@@ -6,7 +6,7 @@ import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, Product, MyOccasion, Greeting, ReceivedGift, CLOSENESS_OPTIONS, closenessLabel, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
 import GreetingModal from '../components/GreetingModal'
-import { getAllLocalPeople, getLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, createLocalPerson, findLocalProfileByPhone, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getVisibleLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven, getLocalReceivedGifts, addLocalWishlistItem, setLocalWishlistHold } from '../lib/localStore'
+import { getAllLocalPeople, getLocalPeople, getLocalOccasions, createLocalOccasion, deleteLocalOccasion, upsertLocalOccasion, upsertLocalPerson, createLocalPerson, findLocalProfileByPhone, getLocalGreetingsForPerson, getLocalGreetingsForReceiver, getLocalProfile, getLocalWishlist, getVisibleLocalWishlist, getLocalShoppingItems, createLocalShoppingItem, updateLocalShoppingItem, getDisplayOccasionsForPerson, applyLinkedAccountToPerson, isOwnOccasion, markGiftGiven, getLocalReceivedGifts, getLocalReceivedGiftsForPerson, addLocalWishlistItem, setLocalWishlistHold } from '../lib/localStore'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import { sendGiftInvite } from '../lib/invite'
@@ -116,11 +116,17 @@ export default function PersonDetailPage() {
           visibility: item.visibility,
           reserved_by_user_id: item.reserved_by_user_id || null,
         })))
-        setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
+        const byUser = getLocalReceivedGifts(personRec.linked_user_id)
+        const byPerson = getLocalReceivedGiftsForPerson(personRec.id)
+        const mergedGifts = [...byUser]
+        for (const g of byPerson) {
+          if (!mergedGifts.some(p => p.id === g.id)) mergedGifts.push(g)
+        }
+        setReceivedGifts(mergedGifts.sort((a, b) => b.created_at.localeCompare(a.created_at)))
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
-        setReceivedGifts([])
+        setReceivedGifts(personRec ? getLocalReceivedGiftsForPerson(personRec.id) : [])
       }
       const personGreetings = getLocalGreetingsForPerson(id!, ['approved'])
       const linkedGreetings = personRec?.linked_user_id ? getLocalGreetingsForReceiver(personRec.linked_user_id, ['approved']) : []
@@ -185,7 +191,13 @@ export default function PersonDetailPage() {
           visibility: item.visibility,
           reserved_by_user_id: item.reserved_by_user_id || null,
         })))
-        setReceivedGifts(getLocalReceivedGifts(personRec.linked_user_id))
+        const byUser = getLocalReceivedGifts(personRec.linked_user_id)
+        const byPerson = getLocalReceivedGiftsForPerson(personRec.id)
+        const mergedGifts = [...byUser]
+        for (const g of byPerson) {
+          if (!mergedGifts.some(p => p.id === g.id)) mergedGifts.push(g)
+        }
+        setReceivedGifts(mergedGifts.sort((a, b) => b.created_at.localeCompare(a.created_at)))
         const visibilities = personRec.closeness === 'very_close' ? ['public', 'very_close'] : ['public']
         const { data: sharedData } = await supabase
           .from('my_occasions')
@@ -225,7 +237,7 @@ export default function PersonDetailPage() {
       } else {
         setLinkedProfile(null)
         setWishlistItems([])
-        setReceivedGifts([])
+        setReceivedGifts(getLocalReceivedGiftsForPerson(id!))
         setOccasions((occasionsData as Occasion[] | null) || getLocalOccasions(id!))
         setApprovedGreetings(getLocalGreetingsForPerson(id!, ['approved']))
         setShopStatus({})
@@ -1072,7 +1084,7 @@ export default function PersonDetailPage() {
           </section>
         )}
 
-        {person.linked_user_id && receivedGifts.length > 0 && (
+        {receivedGifts.length > 0 && (
           <section className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-stone-800 flex items-center gap-2">

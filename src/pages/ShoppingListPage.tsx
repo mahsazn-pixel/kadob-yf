@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShoppingBag, Loader2, Check, Gift, X, ExternalLink } from 'lucide-react'
+import { ShoppingBag, Loader2, Check, Gift, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
-import { ShoppingListItem, formatPrice } from '../lib/types'
-import { getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem, markGiftGiven, setLocalWishlistHold } from '../lib/localStore'
+import { ClosePerson, ShoppingListItem, closenessLabel, formatPrice } from '../lib/types'
+import { getLocalPeople, getLocalShoppingItems, updateLocalShoppingItem, deleteLocalShoppingItem, markGiftGiven, setLocalWishlistHold } from '../lib/localStore'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
@@ -18,10 +18,35 @@ export default function ShoppingListPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('all')
   const [updating, setUpdating] = useState<string | null>(null)
+  const [people, setPeople] = useState<ClosePerson[]>([])
+  const [giftTargetId, setGiftTargetId] = useState<string | null>(null)
+  const [giftReceiverId, setGiftReceiverId] = useState('')
+  const [toastMsg, setToastMsg] = useState('')
 
   useEffect(() => {
-    if (user) fetchItems()
+    if (user) {
+      fetchItems()
+      void fetchPeople()
+    }
   }, [user])
+
+  const fetchPeople = async () => {
+    const local = getLocalPeople(user!.id)
+    if (user!.id.startsWith('local-')) {
+      setPeople(local)
+      return
+    }
+    try {
+      const { data } = await supabase
+        .from('close_people')
+        .select('*')
+        .eq('owner_user_id', user!.id)
+        .order('created_at', { ascending: false })
+      setPeople(data && data.length > 0 ? data : local)
+    } catch {
+      setPeople(local)
+    }
+  }
 
   const fetchItems = async () => {
     setLoading(true)
@@ -45,32 +70,37 @@ export default function ShoppingListPage() {
     }
   }
 
-  const updateStatus = async (id: string, status: 'purchased' | 'gifted') => {
+  const updateStatus = async (id: string, status: 'purchased' | 'gifted', receiverOverride?: ClosePerson | null) => {
     setUpdating(id)
-    const updates: Partial<{ status: string; purchased_at: string; gifted_at: string }> = { status }
+    const current = items.find(item => item.id === id)
+    const receiver = receiverOverride || current?.receiver || null
+    const updates: Partial<ShoppingListItem> = { status }
     if (status === 'purchased') updates.purchased_at = new Date().toISOString()
-    if (status === 'gifted') updates.gifted_at = new Date().toISOString()
-    updateLocalShoppingItem(id, updates)
     if (status === 'gifted') {
-      const current = items.find(item => item.id === id)
-      if (current) {
-        markGiftGiven({
-          giver_user_id: user!.id,
-          giver_name: profile?.name || 'یک کاربر',
-          receiver_person_id: current.receiver_id,
-          receiver_user_id: current.receiver?.linked_user_id,
-          product_id: current.product_id,
-          product: current.product,
-          shopping_item_id: current.id,
-        })
-        const receiverUserId = current.receiver?.linked_user_id
-          || (current.receiver?.name === 'خودم' ? current.receiver.owner_user_id : null)
-        if (!user!.id.startsWith('local-') && receiverUserId) {
-          try {
-            await supabase.from('wishlist_items').delete().eq('owner_user_id', receiverUserId).eq('product_id', current.product_id)
-          } catch {
-            // local fallback
-          }
+      updates.gifted_at = new Date().toISOString()
+      if (receiver) {
+        updates.receiver_id = receiver.id
+        updates.receiver = receiver
+      }
+    }
+    updateLocalShoppingItem(id, updates)
+    if (status === 'gifted' && current && receiver) {
+      markGiftGiven({
+        giver_user_id: user!.id,
+        giver_name: profile?.name || 'یک کاربر',
+        receiver_person_id: receiver.id,
+        receiver_user_id: receiver.linked_user_id,
+        product_id: current.product_id,
+        product: current.product,
+        shopping_item_id: current.id,
+      })
+      const receiverUserId = receiver.linked_user_id
+        || (receiver.name === 'خودم' ? receiver.owner_user_id : null)
+      if (!user!.id.startsWith('local-') && receiverUserId) {
+        try {
+          await supabase.from('wishlist_items').delete().eq('owner_user_id', receiverUserId).eq('product_id', current.product_id)
+        } catch {
+          // local fallback
         }
       }
     }
@@ -85,7 +115,25 @@ export default function ShoppingListPage() {
       }
     }
     setUpdating(null)
+    setGiftTargetId(null)
+    setGiftReceiverId('')
     fetchItems()
+  }
+
+  const openGiftPicker = (item: ShoppingListItem) => {
+    setGiftTargetId(item.id)
+    setGiftReceiverId(item.receiver_id || '')
+  }
+
+  const confirmGiftPerson = () => {
+    if (!giftTargetId) return
+    const receiver = people.find(p => p.id === giftReceiverId)
+    if (!receiver) {
+      setToastMsg('یک نفر را انتخاب کنید')
+      setTimeout(() => setToastMsg(''), 2500)
+      return
+    }
+    void updateStatus(giftTargetId, 'gifted', receiver)
   }
 
   const cancelReservation = async (id: string) => {
@@ -190,8 +238,10 @@ export default function ShoppingListPage() {
                       }`}>
                         {item.status === 'reserved' ? 'رزرو شده' : item.status === 'purchased' ? 'خریدم' : 'هدیه دادم'}
                       </span>
-                      {item.receiver && (
+                      {item.receiver ? (
                         <span className="text-xs text-stone-400">برای {item.receiver.name}</span>
+                      ) : (
+                        <span className="text-xs text-stone-400">بدون شخص</span>
                       )}
                     </div>
                   </div>
@@ -228,7 +278,7 @@ export default function ShoppingListPage() {
                   {item.status === 'purchased' && (
                     <>
                       <button
-                        onClick={() => updateStatus(item.id, 'gifted')}
+                        onClick={() => openGiftPicker(item)}
                         className="flex-1 py-2.5 text-sm font-medium text-success-600 hover:bg-success-50 transition-colors flex items-center justify-center gap-1.5"
                       >
                         <Gift size={16} /> هدیه دادم
@@ -246,6 +296,52 @@ export default function ShoppingListPage() {
           </div>
         )}
       </div>
+
+      {giftTargetId && (
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={() => { setGiftTargetId(null); setGiftReceiverId('') }}>
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" />
+          <div
+            className="relative bg-white w-full rounded-t-3xl p-5 pb-24 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-stone-800">به چه شخصی؟</h2>
+              <button type="button" onClick={() => { setGiftTargetId(null); setGiftReceiverId('') }} className="p-1.5 rounded-lg hover:bg-stone-100">
+                <X size={20} className="text-stone-500" />
+              </button>
+            </div>
+            <p className="text-sm text-stone-600 mb-4">هدیه به نام این شخص ثبت می‌شود</p>
+            <select
+              value={giftReceiverId}
+              onChange={(e) => setGiftReceiverId(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all bg-white mb-4"
+            >
+              <option value="">یک نفر را انتخاب کنید</option>
+              {people.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.name === 'خودم' ? '' : ` (${closenessLabel(p.closeness)})`}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={confirmGiftPerson}
+              disabled={updating === giftTargetId}
+              className="w-full py-3.5 rounded-xl bg-primary-500 text-white font-semibold hover:bg-primary-600 disabled:opacity-50 transition-all"
+            >
+              ثبت هدیه
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toastMsg && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-50 px-5 flex justify-center pointer-events-none">
+          <div className="px-5 py-2.5 rounded-xl bg-neutral-900 text-white text-sm font-medium shadow-lg animate-slide-up">
+            {toastMsg}
+          </div>
+        </div>
+      )}
 
       <BottomNav />
     </div>

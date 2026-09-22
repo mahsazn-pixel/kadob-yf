@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Plus, Check } from 'lucide-react'
+import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, MyOccasion, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS, sortPeopleByNearestOccasion } from '../lib/types'
@@ -59,7 +59,9 @@ export default function DiscoveryPage() {
   const [localDeck, setLocalDeck] = useState<Card[]>([])
   const [localReactions, setLocalReactions] = useState<{ product_id: string; reaction: ReactionType }[]>([])
   const [wheelSpinning, setWheelSpinning] = useState(false)
+  const [showBudgetForm, setShowBudgetForm] = useState(false)
   const [pendingTheOneProductId, setPendingTheOneProductId] = useState<string | null>(null)
+  const [personPromptStep, setPersonPromptStep] = useState<'ask' | 'pick' | null>(null)
   const [pickerReceiverId, setPickerReceiverId] = useState('')
   const [showAddReceiver, setShowAddReceiver] = useState(false)
   const [newReceiverName, setNewReceiverName] = useState('')
@@ -248,22 +250,7 @@ export default function DiscoveryPage() {
     const nextReactions = [...localReactions, { product_id: productId, reaction }]
     setLocalReactions(nextReactions)
     if (reaction === 'the_one') {
-      if (!selectedPerson) {
-        openReceiverPicker(productId)
-        return
-      }
-      const product = getCatalogProduct(productId)
-      if (user) {
-        createLocalShoppingItem({
-          user_id: user.id,
-          receiver_id: selectedPerson,
-          product_id: productId,
-          session_id: session?.session_id,
-        })
-        void markWishlistReserved(selectedPerson, productId)
-      }
-      setShopUrl(product?.shop_url || null)
-      setStep('success')
+      openPersonPrompt(productId)
       return
     }
     const nextIdx = currentIdx + 1
@@ -277,8 +264,8 @@ export default function DiscoveryPage() {
   const handleReaction = async (reaction: ReactionType) => {
     if (!session || currentIdx >= currentCards.length) return
     const card = currentCards[currentIdx]
-    if (reaction === 'the_one' && !selectedPerson) {
-      openReceiverPicker(card.product_id)
+    if (reaction === 'the_one') {
+      openPersonPrompt(card.product_id)
       return
     }
     setLoading(true)
@@ -363,7 +350,30 @@ export default function DiscoveryPage() {
     setReviewItems([])
     setLocalDeck([])
     setLocalReactions([])
+    setShopUrl(null)
+    setPendingTheOneProductId(null)
+    setPersonPromptStep(null)
+    setShowBudgetForm(false)
+    setWheelSpinning(false)
+    setError('')
     setStep('budget')
+  }
+
+  const openBudgetForm = () => {
+    if (wheelSpinning || loading) return
+    setError('')
+    setShowBudgetForm(true)
+  }
+
+  const confirmBudgetAndSpin = () => {
+    if (loading || budgetMax <= budgetMin || wheelSpinning) return
+    setError('')
+    setShowBudgetForm(false)
+    setWheelSpinning(true)
+    window.setTimeout(() => {
+      void startSession()
+      setWheelSpinning(false)
+    }, 1600)
   }
 
   const addToWishlist = async (productId: string) => {
@@ -404,21 +414,24 @@ export default function DiscoveryPage() {
     setSendInvite(false)
   }
 
-  const openReceiverPicker = (productId: string) => {
+  const openPersonPrompt = (productId: string) => {
     setPendingTheOneProductId(productId)
-    setPickerReceiverId('')
+    setPersonPromptStep(personId || selectedPerson ? 'pick' : 'ask')
+    setPickerReceiverId(personId || selectedPerson || '')
     resetAddReceiverForm()
   }
 
   const closeReceiverPicker = () => {
     setPendingTheOneProductId(null)
+    setPersonPromptStep(null)
     setPickerReceiverId('')
     resetAddReceiverForm()
   }
 
-  const proceedTheOne = async (productId: string, receiverId: string) => {
-    setSelectedPerson(receiverId)
+  const proceedTheOne = async (productId: string, receiverId: string | null) => {
+    if (receiverId) setSelectedPerson(receiverId)
     setPendingTheOneProductId(null)
+    setPersonPromptStep(null)
     setLoading(true)
     const finishLocal = () => {
       if (user) {
@@ -428,7 +441,7 @@ export default function DiscoveryPage() {
           product_id: productId,
           session_id: session?.session_id,
         })
-        void markWishlistReserved(receiverId, productId)
+        if (receiverId) void markWishlistReserved(receiverId, productId)
       }
       setShopUrl(getCatalogProduct(productId)?.shop_url || null)
       setStep('success')
@@ -461,7 +474,7 @@ export default function DiscoveryPage() {
             product_id: productId,
             session_id: session.session_id,
           })
-          void markWishlistReserved(receiverId, productId)
+          if (receiverId) void markWishlistReserved(receiverId, productId)
         }
         setShopUrl(data.data.shop_url)
         setStep('success')
@@ -591,66 +604,8 @@ export default function DiscoveryPage() {
     return created
   }
 
-  const handleReserveFromReview = async (productId: string) => {
-    if (!session) return
-    if (!selectedPerson) {
-      openReceiverPicker(productId)
-      return
-    }
-    setLoading(true)
-    const finishLocal = () => {
-      if (user && selectedPerson) {
-        createLocalShoppingItem({
-          user_id: user.id,
-          receiver_id: selectedPerson,
-          product_id: productId,
-          session_id: session.session_id,
-        })
-        void markWishlistReserved(selectedPerson, productId)
-      }
-      setShopUrl(getCatalogProduct(productId)?.shop_url || null)
-      setStep('success')
-    }
-    if (isLocalUser || localDeck.length > 0) {
-      finishLocal()
-      setLoading(false)
-      return
-    }
-    try {
-      const token = (await supabase.auth.getSession()).data.session?.access_token
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/discovery-reaction`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          product_id: productId,
-          reaction: 'the_one',
-          session_id: session.session_id,
-        }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        if (user && selectedPerson) {
-          createLocalShoppingItem({
-            user_id: user.id,
-            receiver_id: selectedPerson,
-            product_id: productId,
-            session_id: session.session_id,
-          })
-          void markWishlistReserved(selectedPerson, productId)
-        }
-        setShopUrl(data.data.shop_url)
-        setStep('success')
-      } else {
-        finishLocal()
-      }
-    } catch {
-      finishLocal()
-    } finally {
-      setLoading(false)
-    }
+  const handleReserveFromReview = (productId: string) => {
+    openPersonPrompt(productId)
   }
 
   const currentCard = currentCards[currentIdx]
@@ -673,11 +628,7 @@ export default function DiscoveryPage() {
           <GiftWheel
             spinning={wheelSpinning}
             disabled={loading}
-            onSpin={() => {
-              if (wheelSpinning || loading) return
-              setError('')
-              setStep('budget')
-            }}
+            onSpin={openBudgetForm}
           />
           {people.length === 0 ? (
             <EmptyState
@@ -752,67 +703,11 @@ export default function DiscoveryPage() {
 
       {step === 'budget' && (
         <div className="px-4 py-4 animate-fade-in">
-          {wheelSpinning ? (
-            <GiftWheel spinning disabled onSpin={() => undefined} />
-          ) : (
-            <>
-              <h2 className="font-bold text-stone-800 mb-1">بودجه</h2>
-              <p className="text-sm text-stone-500 mb-4">بازه قیمت هدیه را مشخص کنید</p>
-
-              <div className="bg-white rounded-2xl p-5 border border-stone-100 space-y-4">
-                <div>
-                  <label className="text-sm text-stone-600 mb-1 block">حداقل قیمت (تومان)</label>
-                  <input
-                    type="number"
-                    value={budgetMin}
-                    onChange={(e) => setBudgetMin(Number(e.target.value))}
-                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm text-stone-600 mb-1 block">حداکثر قیمت (تومان)</label>
-                  <input
-                    type="number"
-                    value={budgetMax}
-                    onChange={(e) => setBudgetMax(Number(e.target.value))}
-                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-                  />
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  {AGE_RANGE_OPTIONS.map(option => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => setAgeRange(option.id === ageRange ? null : option.id)}
-                      className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                        ageRange === option.id
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-600'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                onClick={() => {
-                  if (loading || budgetMax <= budgetMin || wheelSpinning) return
-                  setError('')
-                  setWheelSpinning(true)
-                  window.setTimeout(() => {
-                    void startSession()
-                    setWheelSpinning(false)
-                  }, 1600)
-                }}
-                disabled={loading || budgetMax <= budgetMin}
-                className="w-full mt-4 py-3.5 rounded-xl bg-primary-500 text-white font-semibold shadow-lg shadow-primary-500/30 hover:bg-primary-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 size={20} className="animate-spin" /> : 'شروع کشف هدیه'}
-              </button>
-            </>
-          )}
+          <GiftWheel
+            spinning={wheelSpinning}
+            disabled={loading}
+            onSpin={openBudgetForm}
+          />
         </div>
       )}
 
@@ -833,17 +728,6 @@ export default function DiscoveryPage() {
               <img src={currentCard.image_url} alt={currentCard.title} className="w-full h-full object-cover" />
             )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-            <button
-              onClick={() => addToWishlist(currentCard.product_id)}
-              disabled={wishlistLoading || wishlisted.has(currentCard.product_id)}
-              className="absolute top-3 left-3 w-10 h-10 rounded-full bg-neutral-900 backdrop-blur-sm flex items-center justify-center text-white hover:bg-neutral-800 transition-all active:scale-90 disabled:opacity-70"
-            >
-              {wishlisted.has(currentCard.product_id) ? (
-                <Check size={20} className="text-success-400" />
-              ) : (
-                <Plus size={22} />
-              )}
-            </button>
             <div className="absolute bottom-0 left-0 right-0 p-5 text-white">
               <p className="text-xs opacity-80 mb-1">{currentCard.merchant?.name}</p>
               <h3 className="font-bold text-lg leading-tight mb-2">{currentCard.title}</h3>
@@ -894,7 +778,7 @@ export default function DiscoveryPage() {
       )}
 
       {step === 'success' && (
-        <div className="flex flex-col items-center justify-center py-16 px-6 animate-pop">
+        <div className="flex flex-col items-center justify-center py-10 px-6 animate-pop">
           <div className="relative w-32 h-32 flex items-center justify-center mb-4">
             <div className="absolute inset-0 flex items-center justify-center">
               <svg width="80" height="80" viewBox="0 0 80 80" className="animate-arrow-heart absolute" style={{ animationDelay: '0s' }}>
@@ -922,10 +806,17 @@ export default function DiscoveryPage() {
           )}
           <button
             onClick={() => navigate('/shopping-list')}
-            className="px-6 py-3 rounded-sm bg-neutral-900 text-white font-medium hover:bg-neutral-800 transition-colors"
+            className="px-6 py-3 rounded-sm bg-neutral-900 text-white font-medium hover:bg-neutral-800 transition-colors mb-6"
           >
             لیست خرید من
           </button>
+          <div className="w-full max-w-sm">
+            <GiftWheel
+              spinning={wheelSpinning}
+              disabled={loading}
+              onSpin={openBudgetForm}
+            />
+          </div>
         </div>
       )}
 
@@ -1003,132 +894,252 @@ export default function DiscoveryPage() {
         </div>
       )}
 
-      {pendingTheOneProductId && (
-        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={closeReceiverPicker}>
+      {showBudgetForm && (
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={() => setShowBudgetForm(false)}>
           <div className="absolute inset-0 bg-black/40 animate-fade-in" />
           <div
             className="relative bg-white w-full rounded-t-3xl p-5 pb-24 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-stone-800">این هدیه برای کیست؟</h2>
-              <button type="button" onClick={closeReceiverPicker} className="p-1.5 rounded-lg hover:bg-stone-100">
+              <h2 className="text-lg font-bold text-stone-800">بودجه</h2>
+              <button type="button" onClick={() => setShowBudgetForm(false)} className="p-1.5 rounded-lg hover:bg-stone-100">
                 <X size={20} className="text-stone-500" />
               </button>
             </div>
-            <p className="text-sm text-stone-600 mb-4">یکی از نزدیکان را انتخاب کنید</p>
-            <div className="mb-4 space-y-3">
-              <label className="text-sm text-stone-600 mb-1 block">انتخاب نزدیک</label>
-              <select
-                value={pickerReceiverId}
-                onChange={(e) => setPickerReceiverId(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all bg-white"
-              >
-                <option value="">یک نفر را انتخاب کنید</option>
-                {people.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}{p.name === 'خودم' ? '' : ` (${closenessLabel(p.closeness)})`}
-                  </option>
-                ))}
-              </select>
-              {!showAddReceiver && (
-                <button
-                  type="button"
-                  onClick={() => setShowAddReceiver(true)}
-                  className="text-sm text-primary-600 font-medium"
-                >
-                  افزودن نزدیک جدید
-                </button>
-              )}
-              {showAddReceiver && (
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-sm text-stone-600 mb-1 block">نام *</label>
-                    <input
-                      value={newReceiverName}
-                      onChange={(e) => setNewReceiverName(e.target.value)}
-                      placeholder="مثلاً مریم"
-                      className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm text-stone-600 mb-1 block">شماره موبایل (اختیاری)</label>
-                    <input
-                      type="tel"
-                      value={newReceiverPhone}
-                      onChange={(e) => {
-                        const next = e.target.value.replace(/\D/g, '').slice(0, 11)
-                        setNewReceiverPhone(next)
-                        if (!next) setSendInvite(false)
-                      }}
-                      placeholder="09xxxxxxxxx"
-                      dir="ltr"
-                      className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
-                    />
-                    {newReceiverPhone.length > 0 && (
-                      <label className="mt-2 flex items-start gap-2.5 p-3 rounded-xl bg-primary-50 border border-primary-100 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={sendInvite}
-                          onChange={(e) => setSendInvite(e.target.checked)}
-                          disabled={!/^09\d{9}$/.test(newReceiverPhone)}
-                          className="mt-0.5 w-4 h-4 rounded border-stone-300 text-primary-500 accent-primary-500"
-                        />
-                        <span className="text-sm text-stone-700 leading-6">
-                          پیام دعوت فرستاده شود
-                        </span>
-                      </label>
-                    )}
-                  </div>
-                  <div>
-                    <label className="text-sm text-stone-600 mb-1 block">جنسیت</label>
-                    <div className="flex gap-2">
-                      {[
-                        { v: 'male', l: 'مرد' },
-                        { v: 'female', l: 'زن' },
-                        { v: 'unknown', l: 'نامشخص' },
-                      ].map(g => (
-                        <button
-                          key={g.v}
-                          type="button"
-                          onClick={() => setNewReceiverGender(g.v)}
-                          className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                            newReceiverGender === g.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
-                          }`}
-                        >
-                          {g.l}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-sm text-stone-600 mb-1 block">میزان نزدیکی</label>
-                    <div className="flex gap-2">
-                      {CLOSENESS_OPTIONS.map(c => (
-                        <button
-                          key={c.v}
-                          type="button"
-                          onClick={() => setNewReceiverCloseness(c.v)}
-                          className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                            newReceiverCloseness === c.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
-                          }`}
-                        >
-                          {c.l}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            <p className="text-sm text-stone-600 mb-4">بازه قیمت هدیه را مشخص کنید</p>
+            <div className="space-y-4 mb-4">
+              <div>
+                <label className="text-sm text-stone-600 mb-1 block">حداقل قیمت (تومان)</label>
+                <input
+                  type="number"
+                  value={budgetMin}
+                  onChange={(e) => setBudgetMin(Number(e.target.value))}
+                  className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-stone-600 mb-1 block">حداکثر قیمت (تومان)</label>
+                <input
+                  type="number"
+                  value={budgetMax}
+                  onChange={(e) => setBudgetMax(Number(e.target.value))}
+                  className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                />
+              </div>
+              <div>
+                <p className="text-sm text-stone-600 mb-2">بازه سنی</p>
+                <div className="flex gap-2 flex-wrap">
+                  {AGE_RANGE_OPTIONS.map(option => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setAgeRange(option.id === ageRange ? null : option.id)}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        ageRange === option.id
+                          ? 'bg-primary-100 text-primary-700'
+                          : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-600'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                 </div>
-              )}
+              </div>
             </div>
             <button
               type="button"
-              onClick={() => { void confirmReceiverAndReserve() }}
-              disabled={loading || savingReceiver}
-              className="w-full py-3.5 rounded-xl bg-primary-500 text-white font-semibold hover:bg-primary-600 disabled:opacity-50 transition-all"
+              onClick={confirmBudgetAndSpin}
+              disabled={loading || budgetMax <= budgetMin}
+              className="w-full py-3.5 rounded-xl bg-primary-500 text-white font-semibold shadow-lg shadow-primary-500/30 hover:bg-primary-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
             >
-              تأیید
+              {loading ? <Loader2 size={20} className="animate-spin" /> : 'شروع کشف هدیه'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {pendingTheOneProductId && personPromptStep && (
+        <div className="fixed top-0 bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[600px] z-[60] flex items-end justify-center" onClick={closeReceiverPicker}>
+          <div className="absolute inset-0 bg-black/40 animate-fade-in" />
+          <div
+            className="relative bg-white w-full rounded-t-3xl p-5 pb-24 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {personPromptStep === 'ask' ? (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-stone-800">آیا شخص خاصی را در نظر داری؟</h2>
+                  <button type="button" onClick={closeReceiverPicker} className="p-1.5 rounded-lg hover:bg-stone-100">
+                    <X size={20} className="text-stone-500" />
+                  </button>
+                </div>
+                <p className="text-sm text-stone-600 mb-5">اگر نه، آیتم بدون نام شخص در لیست خرید ذخیره می‌شود</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!pendingTheOneProductId) return
+                      void proceedTheOne(pendingTheOneProductId, null)
+                    }}
+                    className="py-3.5 rounded-xl bg-stone-100 text-stone-700 font-semibold hover:bg-stone-200 transition-all"
+                  >
+                    نه
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPersonPromptStep('pick')}
+                    className="py-3.5 rounded-xl bg-primary-500 text-white font-semibold hover:bg-primary-600 transition-all"
+                  >
+                    بله
+                  </button>
+                </div>
+                {pendingTheOneProductId && (
+                  <button
+                    type="button"
+                    onClick={() => { void addToWishlist(pendingTheOneProductId) }}
+                    disabled={wishlistLoading || wishlisted.has(pendingTheOneProductId)}
+                    className="w-full mt-3 py-3.5 rounded-xl border border-stone-200 text-stone-700 font-semibold hover:bg-stone-50 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    {wishlisted.has(pendingTheOneProductId) ? <Check size={18} /> : <Heart size={18} />}
+                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌ها افزوده شد' : 'افزودن به لیست خواسته‌ها'}
+                  </button>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-bold text-stone-800">این هدیه برای کیست؟</h2>
+                  <button type="button" onClick={closeReceiverPicker} className="p-1.5 rounded-lg hover:bg-stone-100">
+                    <X size={20} className="text-stone-500" />
+                  </button>
+                </div>
+                <p className="text-sm text-stone-600 mb-4">یکی از نزدیکان را انتخاب کنید</p>
+                <div className="mb-4 space-y-3">
+                  <label className="text-sm text-stone-600 mb-1 block">انتخاب نزدیک</label>
+                  <select
+                    value={pickerReceiverId}
+                    onChange={(e) => setPickerReceiverId(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all bg-white"
+                  >
+                    <option value="">یک نفر را انتخاب کنید</option>
+                    {people.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.name === 'خودم' ? '' : ` (${closenessLabel(p.closeness)})`}
+                      </option>
+                    ))}
+                  </select>
+                  {!showAddReceiver && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddReceiver(true)}
+                      className="text-sm text-primary-600 font-medium"
+                    >
+                      افزودن نزدیک جدید
+                    </button>
+                  )}
+                  {showAddReceiver && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-sm text-stone-600 mb-1 block">نام *</label>
+                        <input
+                          value={newReceiverName}
+                          onChange={(e) => setNewReceiverName(e.target.value)}
+                          placeholder="مثلاً مریم"
+                          className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm text-stone-600 mb-1 block">شماره موبایل (اختیاری)</label>
+                        <input
+                          type="tel"
+                          value={newReceiverPhone}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(/\D/g, '').slice(0, 11)
+                            setNewReceiverPhone(next)
+                            if (!next) setSendInvite(false)
+                          }}
+                          placeholder="09xxxxxxxxx"
+                          dir="ltr"
+                          className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
+                        />
+                        {newReceiverPhone.length > 0 && (
+                          <label className="mt-2 flex items-start gap-2.5 p-3 rounded-xl bg-primary-50 border border-primary-100 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={sendInvite}
+                              onChange={(e) => setSendInvite(e.target.checked)}
+                              disabled={!/^09\d{9}$/.test(newReceiverPhone)}
+                              className="mt-0.5 w-4 h-4 rounded border-stone-300 text-primary-500 accent-primary-500"
+                            />
+                            <span className="text-sm text-stone-700 leading-6">
+                              پیام دعوت فرستاده شود
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                      <div>
+                        <label className="text-sm text-stone-600 mb-1 block">جنسیت</label>
+                        <div className="flex gap-2">
+                          {[
+                            { v: 'male', l: 'مرد' },
+                            { v: 'female', l: 'زن' },
+                            { v: 'unknown', l: 'نامشخص' },
+                          ].map(g => (
+                            <button
+                              key={g.v}
+                              type="button"
+                              onClick={() => setNewReceiverGender(g.v)}
+                              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                                newReceiverGender === g.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
+                              }`}
+                            >
+                              {g.l}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-stone-600 mb-1 block">میزان نزدیکی</label>
+                        <div className="flex gap-2">
+                          {CLOSENESS_OPTIONS.map(c => (
+                            <button
+                              key={c.v}
+                              type="button"
+                              onClick={() => setNewReceiverCloseness(c.v)}
+                              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                                newReceiverCloseness === c.v ? 'bg-primary-500 text-white' : 'bg-stone-100 text-stone-600'
+                              }`}
+                            >
+                              {c.l}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { void confirmReceiverAndReserve() }}
+                  disabled={loading || savingReceiver}
+                  className="w-full py-3.5 rounded-xl bg-primary-500 text-white font-semibold hover:bg-primary-600 disabled:opacity-50 transition-all"
+                >
+                  تأیید
+                </button>
+                {pendingTheOneProductId && (
+                  <button
+                    type="button"
+                    onClick={() => { void addToWishlist(pendingTheOneProductId) }}
+                    disabled={wishlistLoading || wishlisted.has(pendingTheOneProductId)}
+                    className="w-full mt-3 py-3.5 rounded-xl border border-stone-200 text-stone-700 font-semibold hover:bg-stone-50 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                  >
+                    {wishlisted.has(pendingTheOneProductId) ? <Check size={18} /> : <Heart size={18} />}
+                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌ها افزوده شد' : 'افزودن به لیست خواسته‌ها'}
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

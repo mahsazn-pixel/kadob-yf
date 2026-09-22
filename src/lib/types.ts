@@ -162,7 +162,7 @@ export interface UserInteraction {
 export interface ShoppingListItem {
   id: string
   user_id: string
-  receiver_id: string
+  receiver_id: string | null
   product_id: string
   product: Product | null
   receiver: ClosePerson | null
@@ -188,7 +188,8 @@ export interface Notification {
 
 export interface ReceivedGift {
   id: string
-  receiver_user_id: string
+  receiver_user_id: string | null
+  receiver_person_id?: string | null
   giver_user_id: string
   giver_name: string
   product_id: string
