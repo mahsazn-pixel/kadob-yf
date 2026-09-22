@@ -265,7 +265,7 @@ export default function ProfilePage() {
             <div className="w-10 h-10 rounded-lg bg-primary-50 flex items-center justify-center">
               <Heart size={20} className="text-primary-600" />
             </div>
-            <span className="flex-1 text-right font-medium text-stone-700">لیست آرزوها</span>
+            <span className="flex-1 text-right font-medium text-stone-700">لیست خواسته‌های خودم</span>
           </button>
 
           <button

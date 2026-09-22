@@ -598,8 +598,18 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange, onUpd
             )}
           </div>
         </Link>
-        <Link to={`/people/${person.id}`} className="flex-1 min-w-0">
-          <p className="font-semibold text-stone-800">{person.name}</p>
+        <div className="flex-1 min-w-0">
+          {isSelf ? (
+            <Link to="/profile" className="font-semibold text-primary-600 hover:underline">
+              {person.name}
+            </Link>
+          ) : person.linked_user_id ? (
+            <Link to={`/people/${person.id}`} className="font-semibold text-primary-600 hover:underline">
+              {person.name}
+            </Link>
+          ) : (
+            <p className="font-semibold text-stone-800">{person.name}</p>
+          )}
           {!isSelf && (
             <p className="text-xs text-stone-500 mt-0.5">{closenessLabel(person.closeness)}{person.phone ? ` • ${person.phone}` : ''}</p>
           )}
@@ -614,7 +624,7 @@ function PersonCard({ person, onDelete, isSelf = false, onOccasionsChange, onUpd
                `${nearestOccasion.title} - گذشته`}
             </p>
           )}
-        </Link>
+        </div>
         <div className="flex items-center gap-1">
           {isBirthdayWindow && !isSelf && (
             <button

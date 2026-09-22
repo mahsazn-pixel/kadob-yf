@@ -69,7 +69,7 @@ export default function WishlistPage() {
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
       <PageHeader
-        title="لیست آرزوها"
+        title="لیست خواسته‌های خودم"
         subtitle={`${items.length} مورد`}
         back
       />
@@ -85,7 +85,7 @@ export default function WishlistPage() {
         ) : items.length === 0 ? (
           <EmptyState
             icon={<Heart size={32} />}
-            title="هنوز هیچ آیتمی را به لیست خواسته‌های خود اضافه نکرده‌اید"
+            title="هنوز هیچ آیتمی را به لیست خواسته‌های خودم اضافه نکرده‌اید"
             action={
               <button
                 onClick={() => navigate('/discover')}

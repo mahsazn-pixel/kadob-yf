@@ -47,6 +47,7 @@ export default function PersonDetailPage() {
   const [wishlistSaving, setWishlistSaving] = useState(false)
   const [closePeople, setClosePeople] = useState<ClosePerson[]>([])
   const [reserveTargetProduct, setReserveTargetProduct] = useState<Product | null>(null)
+  const [reserveFromReceived, setReserveFromReceived] = useState(false)
   const [selectedReceiverId, setSelectedReceiverId] = useState('')
   const [reserveForOther, setReserveForOther] = useState(false)
   const [showAddReceiver, setShowAddReceiver] = useState(false)
@@ -522,6 +523,7 @@ export default function PersonDetailPage() {
 
   const closeReservePicker = () => {
     setReserveTargetProduct(null)
+    setReserveFromReceived(false)
     setSelectedReceiverId('')
     setReserveForOther(false)
     resetAddReceiverForm()
@@ -529,17 +531,18 @@ export default function PersonDetailPage() {
 
   const receiverChoices = closePeople.filter(p => p.id !== person?.id)
 
-  const openReservePicker = (product: Product) => {
+  const openReservePicker = (product: Product, fromReceived = false) => {
     setReserveTargetProduct(product)
+    setReserveFromReceived(fromReceived)
     setSelectedReceiverId('')
-    setReserveForOther(false)
+    setReserveForOther(fromReceived)
     resetAddReceiverForm()
   }
 
   const confirmReserveForReceiver = async () => {
     if (!reserveTargetProduct) return
     const product = reserveTargetProduct
-    if (!reserveForOther) {
+    if (!reserveForOther && !reserveFromReceived) {
       void persistShoppingStatus({ product_id: product.id, product }, 'reserved')
       closeReservePicker()
       setPreviewProduct(null)
@@ -666,7 +669,7 @@ export default function PersonDetailPage() {
       return
     }
     if (ownWishlistIds.has(product.id)) {
-      showToast('قبلاً به لیست خواسته‌ها اضافه شده')
+      showToast('قبلاً به لیست خواسته‌های خودم اضافه شده')
       return
     }
     setWishlistSaving(true)
@@ -679,7 +682,7 @@ export default function PersonDetailPage() {
         // local fallback
       }
     }
-    showToast('به لیست خواسته‌ها افزوده شد')
+    showToast('به لیست خواسته‌های خودم افزوده شد')
     setWishlistSaving(false)
   }
 
@@ -942,7 +945,7 @@ export default function PersonDetailPage() {
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-stone-800 flex items-center gap-2">
                 <Heart size={18} className="text-primary-500" />
-                لیست خواسته‌ها
+                {isSelf ? 'لیست خواسته‌های خودم' : 'لیست خواسته‌ها'}
               </h3>
               {visitorView && wishlistItems.length > 4 && (
                 <button
@@ -1189,8 +1192,7 @@ export default function PersonDetailPage() {
               </button>
             </div>
             <div className="p-4">
-              <p className="text-sm text-stone-500">{previewProduct.merchant_name}</p>
-              <h3 className="font-bold text-stone-800 mt-1">{previewProduct.title}</h3>
+              <h3 className="font-bold text-stone-800">{previewProduct.title}</h3>
               <p className="text-primary-600 font-bold mt-2">{formatPrice(previewProduct.price_amount)}</p>
               <div className="grid grid-cols-2 gap-2 mt-4">
                 {previewProduct.shop_url && (
@@ -1239,7 +1241,7 @@ export default function PersonDetailPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      openReservePicker(previewProduct)
+                      openReservePicker(previewProduct, previewSource === 'received')
                       setPreviewProduct(null)
                       setPreviewSource(null)
                     }}
@@ -1256,7 +1258,7 @@ export default function PersonDetailPage() {
                   className="py-2.5 rounded-xl bg-stone-100 text-stone-700 text-xs font-medium flex items-center justify-center gap-1 disabled:opacity-50 col-span-2"
                 >
                   {ownWishlistIds.has(previewProduct.id) ? <Check size={14} /> : <Plus size={14} />}
-                  افزودن به لیست خواسته‌ها
+                  افزودن به لیست خواسته‌های خودم
                 </button>
               </div>
             </div>
@@ -1277,36 +1279,44 @@ export default function PersonDetailPage() {
                 <X size={20} className="text-stone-500" />
               </button>
             </div>
-            <p className="text-sm text-stone-600 mb-4">
-              این آیتم را برای {person.name} می‌خواهید یا برای شخص دیگر؟
-            </p>
-            <div className="space-y-2 mb-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setReserveForOther(false)
-                  setShowAddReceiver(false)
-                  setSelectedReceiverId('')
-                }}
-                className={`w-full p-3.5 rounded-2xl border text-right transition-all ${
-                  !reserveForOther ? 'bg-primary-50 border-primary-300' : 'bg-white border-stone-100'
-                }`}
-              >
-                <p className="font-semibold text-stone-800">برای {person.name}</p>
-                <p className="text-xs text-stone-500 mt-0.5">همین کاربر</p>
-              </button>
-              <button
-                type="button"
-                onClick={() => setReserveForOther(true)}
-                className={`w-full p-3.5 rounded-2xl border text-right transition-all ${
-                  reserveForOther ? 'bg-primary-50 border-primary-300' : 'bg-white border-stone-100'
-                }`}
-              >
-                <p className="font-semibold text-stone-800">برای شخص دیگر</p>
-                <p className="text-xs text-stone-500 mt-0.5">از لیست نزدیکان انتخاب کنید</p>
-              </button>
-            </div>
-            {reserveForOther && (
+            {reserveFromReceived ? (
+              <p className="text-sm text-stone-600 mb-4">
+                این آیتم قبلاً به {person.name} هدیه شده است، آیا می‌خواهید آن را برای شخص دیگری رزرو کنید؟
+              </p>
+            ) : (
+              <p className="text-sm text-stone-600 mb-4">
+                این آیتم را برای {person.name} می‌خواهید یا برای شخص دیگر؟
+              </p>
+            )}
+            {!reserveFromReceived && (
+              <div className="space-y-2 mb-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReserveForOther(false)
+                    setShowAddReceiver(false)
+                    setSelectedReceiverId('')
+                  }}
+                  className={`w-full p-3.5 rounded-2xl border text-right transition-all ${
+                    !reserveForOther ? 'bg-primary-50 border-primary-300' : 'bg-white border-stone-100'
+                  }`}
+                >
+                  <p className="font-semibold text-stone-800">برای {person.name}</p>
+                  <p className="text-xs text-stone-500 mt-0.5">همین کاربر</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReserveForOther(true)}
+                  className={`w-full p-3.5 rounded-2xl border text-right transition-all ${
+                    reserveForOther ? 'bg-primary-50 border-primary-300' : 'bg-white border-stone-100'
+                  }`}
+                >
+                  <p className="font-semibold text-stone-800">برای شخص دیگر</p>
+                  <p className="text-xs text-stone-500 mt-0.5">از لیست نزدیکان انتخاب کنید</p>
+                </button>
+              </div>
+            )}
+            {(reserveForOther || reserveFromReceived) && (
               <div className="mb-4 space-y-3">
                 <label className="text-sm text-stone-600 mb-1 block">انتخاب نزدیک</label>
                 <select

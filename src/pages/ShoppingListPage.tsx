@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ShoppingBag, Loader2, Check, Gift, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
@@ -239,7 +239,20 @@ export default function ShoppingListPage() {
                         {item.status === 'reserved' ? 'رزرو شده' : item.status === 'purchased' ? 'خریدم' : 'هدیه دادم'}
                       </span>
                       {item.receiver ? (
-                        <span className="text-xs text-stone-400">برای {item.receiver.name}</span>
+                        <span className="text-xs text-stone-400">
+                          برای{' '}
+                          {item.receiver.name === 'خودم' ? (
+                            <Link to="/profile" className="text-primary-600 hover:underline">
+                              {item.receiver.name}
+                            </Link>
+                          ) : item.receiver.linked_user_id ? (
+                            <Link to={`/people/${item.receiver.id}`} className="text-primary-600 hover:underline">
+                              {item.receiver.name}
+                            </Link>
+                          ) : (
+                            item.receiver.name
+                          )}
+                        </span>
                       ) : (
                         <span className="text-xs text-stone-400">بدون شخص</span>
                       )}

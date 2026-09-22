@@ -71,6 +71,7 @@ export default function DiscoveryPage() {
   const [sendInvite, setSendInvite] = useState(false)
   const [savingReceiver, setSavingReceiver] = useState(false)
   const [peopleVisibleCount, setPeopleVisibleCount] = useState(10)
+  const [showCardDetails, setShowCardDetails] = useState(false)
   const isLocalUser = !!user?.id.startsWith('local-')
   const PEOPLE_PAGE_SIZE = 10
   const AGE_RANGE_OPTIONS = [
@@ -155,6 +156,7 @@ export default function DiscoveryPage() {
     })
     setCurrentCards(cards)
     setCurrentIdx(0)
+    setShowCardDetails(false)
     setStep('discovery')
     return true
   }
@@ -199,6 +201,7 @@ export default function DiscoveryPage() {
       setSession(data.data)
       setCurrentCards(remoteCards)
       setCurrentIdx(0)
+      setShowCardDetails(false)
       setStep('discovery')
     } catch {
       startLocalSession()
@@ -258,6 +261,7 @@ export default function DiscoveryPage() {
       finishLocalReview(nextReactions)
       return
     }
+    setShowCardDetails(false)
     setCurrentIdx(nextIdx)
   }
 
@@ -308,11 +312,13 @@ export default function DiscoveryPage() {
         setStep('failed')
       } else if (result.next_card) {
         setCurrentCards(prev => [...prev, result.next_card])
+        setShowCardDetails(false)
         setCurrentIdx(prev => prev + 1)
       } else if (currentIdx + 1 >= currentCards.length || currentIdx + 1 >= 20) {
         await fetchReview()
         setStep('review')
       } else {
+        setShowCardDetails(false)
         setCurrentIdx(prev => prev + 1)
       }
     } catch {
@@ -347,6 +353,7 @@ export default function DiscoveryPage() {
     setSession(null)
     setCurrentCards([])
     setCurrentIdx(0)
+    setShowCardDetails(false)
     setReviewItems([])
     setLocalDeck([])
     setLocalReactions([])
@@ -381,7 +388,7 @@ export default function DiscoveryPage() {
     setWishlistLoading(true)
     const markAdded = () => {
       setWishlisted(prev => new Set(prev).add(productId))
-      setToastMsg('به لیست خواسته‌ها افزوده شد')
+      setToastMsg('به لیست خواسته‌های خودم افزوده شد')
       setTimeout(() => setToastMsg(''), 2500)
     }
     if (isLocalUser) {
@@ -723,17 +730,36 @@ export default function DiscoveryPage() {
             </div>
           </div>
 
-          <div className="relative w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden bg-stone-100 shadow-xl animate-slide-up">
-            {currentCard.image_url && (
-              <img src={currentCard.image_url} alt={currentCard.title} className="w-full h-full object-cover" />
+          <button
+            type="button"
+            onClick={() => setShowCardDetails(v => !v)}
+            className="relative w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden bg-stone-100 shadow-xl animate-slide-up text-right"
+          >
+            {currentCard.image_url ? (
+              <img src={currentCard.image_url} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <ShoppingBag size={40} className="text-stone-300" />
+              </div>
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-            <div className="absolute bottom-0 left-0 right-0 p-5 text-white">
-              <p className="text-xs opacity-80 mb-1">{currentCard.merchant?.name}</p>
-              <h3 className="font-bold text-lg leading-tight mb-2">{currentCard.title}</h3>
-              <p className="text-lg font-bold">{formatPrice(currentCard.price.amount)}</p>
-            </div>
-          </div>
+            {showCardDetails && (
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent flex flex-col justify-end p-5 text-white">
+                <h3 className="font-bold text-lg leading-tight mb-2">{currentCard.title}</h3>
+                <p className="text-lg font-bold mb-3">{formatPrice(currentCard.price.amount)}</p>
+                {currentCard.shop_url && (
+                  <a
+                    href={currentCard.shop_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center justify-center gap-1.5 self-end px-4 py-2 rounded-xl bg-primary-500 text-white text-sm font-medium"
+                  >
+                    <ShoppingBag size={14} /> خرید
+                  </a>
+                )}
+              </div>
+            )}
+          </button>
 
           <div className="w-full max-w-sm mt-6 grid grid-cols-3 gap-2">
             <ReactionButton
@@ -753,7 +779,7 @@ export default function DiscoveryPage() {
               disabled={loading}
             />
             <ReactionButton
-              icon={<Heart size={24} />}
+              icon={<Check size={24} />}
               label={REACTION_LABELS.the_one}
               onClick={() => handleReaction('the_one')}
               color="bg-gradient-to-br from-primary-200 to-primary-300 text-primary-800 border-primary-400"
@@ -791,8 +817,7 @@ export default function DiscoveryPage() {
               <Heart size={56} className="text-error-500 fill-error-500 animate-heart-burst" style={{ animationDelay: '0.4s' }} />
             </div>
           </div>
-          <h2 className="text-xl font-bold text-stone-800 mb-1">عالی! هدیه انتخاب شد</h2>
-          <p className="text-sm text-stone-500 mb-6 text-center">محصول به لیست خرید شما اضافه شد</p>
+          <p className="text-sm text-stone-500 mb-6 text-center">محصول در لیست خرید شما رزرو شد</p>
 
           {shopUrl && (
             <a
@@ -1002,7 +1027,7 @@ export default function DiscoveryPage() {
                     className="w-full mt-3 py-3.5 rounded-xl border border-stone-200 text-stone-700 font-semibold hover:bg-stone-50 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
                   >
                     {wishlisted.has(pendingTheOneProductId) ? <Check size={18} /> : <Heart size={18} />}
-                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌ها افزوده شد' : 'افزودن به لیست خواسته‌ها'}
+                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌های خودم افزوده شد' : 'افزودن به لیست خواسته‌های خودم'}
                   </button>
                 )}
               </>
@@ -1135,7 +1160,7 @@ export default function DiscoveryPage() {
                     className="w-full mt-3 py-3.5 rounded-xl border border-stone-200 text-stone-700 font-semibold hover:bg-stone-50 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
                   >
                     {wishlisted.has(pendingTheOneProductId) ? <Check size={18} /> : <Heart size={18} />}
-                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌ها افزوده شد' : 'افزودن به لیست خواسته‌ها'}
+                    {wishlisted.has(pendingTheOneProductId) ? 'به لیست خواسته‌های خودم افزوده شد' : 'افزودن به لیست خواسته‌های خودم'}
                   </button>
                 )}
               </>
