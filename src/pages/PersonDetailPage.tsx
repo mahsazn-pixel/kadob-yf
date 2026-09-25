@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Calendar, Gift, Trash2, Loader2, PartyPopper, Heart, Edit2, ShoppingBag, Check, Plus, X } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { claimWishlistHold, supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, Product, MyOccasion, Greeting, ReceivedGift, CLOSENESS_OPTIONS, closenessLabel, formatMonthDay, daysUntilOccasion, composeOccasionDate, formatPrice, parseMonthDay } from '../lib/types'
 import OccasionDateFields from '../components/OccasionDateFields'
@@ -384,6 +384,27 @@ export default function PersonDetailPage() {
       })
     }
     try {
+      const receiverUserId = targetPerson.linked_user_id
+        || (targetPerson.name === 'خودم' ? targetPerson.owner_user_id : null)
+      if (receiverUserId && (status === 'reserved' || status === 'purchased')) {
+        const localHeld = setLocalWishlistHold(receiverUserId, productId, user.id)
+        const remoteHeld = user.id.startsWith('local-')
+          ? true
+          : await claimWishlistHold(receiverUserId, productId, user.id)
+        if (!localHeld || !remoteHeld) {
+          showToast('این هدیه قبلاً رزرو شده است')
+          if (trackOnProfile) fetchData()
+          setUpdatingProduct(null)
+          return
+        }
+        if (trackOnProfile) {
+          setWishlistItems(prev => prev.map(w => {
+            const keys = new Set(wishlistKeys(w))
+            if (!keys.has(productId) && !(product?.id && keys.has(product.id))) return w
+            return { ...w, reserved_by_user_id: user.id }
+          }))
+        }
+      }
       let localItem = current?.id ? updateLocalShoppingItem(current.id, {
         status,
         product: product || undefined,
@@ -398,28 +419,6 @@ export default function PersonDetailPage() {
           product,
           status,
         })
-      }
-      const receiverUserId = targetPerson.linked_user_id
-        || (targetPerson.name === 'خودم' ? targetPerson.owner_user_id : null)
-      if (receiverUserId && (status === 'reserved' || status === 'purchased')) {
-        setLocalWishlistHold(receiverUserId, productId, user.id)
-        if (trackOnProfile) {
-          setWishlistItems(prev => prev.map(w => {
-            const keys = new Set(wishlistKeys(w))
-            if (!keys.has(productId) && !(product?.id && keys.has(product.id))) return w
-            return { ...w, reserved_by_user_id: user.id }
-          }))
-        }
-        if (!user.id.startsWith('local-')) {
-          try {
-            await supabase.from('wishlist_items').update({
-              reserved_by_user_id: user.id,
-              reserved_at: now,
-            }).eq('owner_user_id', receiverUserId).eq('product_id', productId)
-          } catch {
-            // local fallback
-          }
-        }
       }
       if (status === 'gifted') {
         updateLocalShoppingItem(localItem.id, {

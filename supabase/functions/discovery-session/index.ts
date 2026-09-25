@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 interface SessionFilters {
-  receiver_id: string;
+  receiver_id?: string | null;
   age_group?: string;
   gender?: string;
   closeness?: string;
@@ -47,28 +47,29 @@ Deno.serve(async (req: Request) => {
 
     const userId = userData.user.id;
     const body: SessionFilters = await req.json();
+    const receiverId = body.receiver_id || null;
 
-    // Verify the close person belongs to the user
-    const { data: person, error: personError } = await supabase
-      .from("close_people")
-      .select("*")
-      .eq("id", body.receiver_id)
-      .eq("owner_user_id", userId)
-      .maybeSingle();
+    if (receiverId) {
+      const { data: person, error: personError } = await supabase
+        .from("close_people")
+        .select("*")
+        .eq("id", receiverId)
+        .eq("owner_user_id", userId)
+        .maybeSingle();
 
-    if (personError || !person) {
-      return new Response(
-        JSON.stringify({ success: false, error: { code: "NOT_FOUND", message: "شخص نزدیک یافت نشد" } }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (personError || !person) {
+        return new Response(
+          JSON.stringify({ success: false, error: { code: "NOT_FOUND", message: "شخص نزدیک یافت نشد" } }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
-    // Create the session
     const { data: session, error: sessionError } = await supabase
       .from("discovery_sessions")
       .insert({
         user_id: userId,
-        receiver_id: body.receiver_id,
+        receiver_id: receiverId,
         filters_json: body,
         status: "active",
         shown_count: 0,
@@ -127,18 +128,21 @@ Deno.serve(async (req: Request) => {
 
     const wishlistProductIds = new Set((wishlistItems || []).map((w: { product_id: string }) => w.product_id));
 
-    // Get previous interactions for this receiver (to avoid repeating products)
-    const { data: previousInteractions } = await supabase
-      .from("user_interactions")
-      .select("product_id, reaction_type")
-      .eq("receiver_id", body.receiver_id);
+    let previousInteractions: { product_id: string; reaction_type: string }[] = [];
+    if (receiverId) {
+      const { data } = await supabase
+        .from("user_interactions")
+        .select("product_id, reaction_type")
+        .eq("receiver_id", receiverId);
+      previousInteractions = data || [];
+    }
 
     const interactedProductIds = new Set((previousInteractions || []).map((i: { product_id: string }) => i.product_id));
 
     // Filter out previously interacted products (for this receiver)
     let availableProducts = products.filter((p: { id: string }) => !interactedProductIds.has(p.id));
 
-    // If we don't have enough, allow previously "good"/"great" products
+    // If we don't have enough, allow previously seen products
     if (availableProducts.length < 20) {
       availableProducts = products;
     }
@@ -185,15 +189,30 @@ Deno.serve(async (req: Request) => {
       }
     }
     const finalProducts = [...diverseProducts, ...remainingProducts].slice(0, 20);
+    const servedProductIds = finalProducts.map((p) => p.id);
 
-    // Build cards
+    const { error: servedError } = await supabase
+      .from("discovery_sessions")
+      .update({
+        served_product_ids: servedProductIds,
+        max_cards: servedProductIds.length,
+      })
+      .eq("id", session.id);
+
+    if (servedError) {
+      return new Response(
+        JSON.stringify({ success: false, error: { code: "INTERNAL_ERROR", message: "خطا در ذخیره کارت‌های جلسه" } }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const cards = finalProducts.map((p, idx) => ({
       id: crypto.randomUUID(),
       product_id: p.id,
       position: idx + 1,
       image_url: p.image_url,
       title: p.title,
-      price: { amount: p.price_amount, currency: p.currency || "IRR" },
+      price: { amount: p.price_amount, currency: p.currency || "IRT" },
       merchant: { name: p.merchant_name },
       shop_url: p.shop_url,
       category: p.category_slug,
@@ -206,7 +225,7 @@ Deno.serve(async (req: Request) => {
         data: {
           session_id: session.id,
           status: "active",
-          max_cards: 20,
+          max_cards: cards.length,
           shown_cards: 0,
           cards,
         },

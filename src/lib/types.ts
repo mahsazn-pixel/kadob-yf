@@ -145,6 +145,7 @@ export interface DiscoverySession {
   status: string
   shown_count: number
   max_cards: number
+  served_product_ids?: string[]
   created_at: string
   completed_at: string | null
 }
@@ -200,26 +201,23 @@ export interface ReceivedGift {
   created_at: string
 }
 
-export type ReactionType = 'no' | 'good' | 'great' | 'the_one'
+export type ReactionType = 'no' | 'good' | 'the_one'
 
 export const REACTION_LABELS: Record<ReactionType, string> = {
   no: 'نه',
   good: 'خوبه',
-  great: 'عالی',
   the_one: 'خودشه',
 }
 
 export const REACTION_WEIGHTS: Record<ReactionType, number> = {
   no: -2,
   good: 1,
-  great: 3,
   the_one: 10,
 }
 
 export const REACTION_COLORS: Record<ReactionType, string> = {
   no: 'bg-error-500',
   good: 'bg-secondary-500',
-  great: 'bg-success-500',
   the_one: 'bg-primary-500',
 }
 

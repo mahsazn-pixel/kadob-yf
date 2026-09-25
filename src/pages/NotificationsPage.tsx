@@ -1,23 +1,34 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Bell, Check, Loader2, X } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { Notification } from '../lib/types'
 import { confirmLocalReceivedGift, getLocalNotifications, getLocalReceivedGifts, rejectLocalReceivedGift, updateLocalNotification } from '../lib/localStore'
+import { OCCASION_REMINDER_SIX_DAYS, OCCASION_REMINDER_TWO_WEEKS, ensureOccasionReminders } from '../lib/occasionReminders'
 import { supabase } from '../lib/supabase'
 import BottomNav from '../components/BottomNav'
 import PageHeader from '../components/PageHeader'
 import EmptyState from '../components/EmptyState'
 
+function isOccasionReminder(item: Notification) {
+  return item.type === OCCASION_REMINDER_TWO_WEEKS || item.type === OCCASION_REMINDER_SIX_DAYS
+}
+
 export default function NotificationsPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [items, setItems] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
   const [updating, setUpdating] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user) return
-    setItems(getLocalNotifications(user.id))
-    setLoading(false)
+    const load = async () => {
+      await ensureOccasionReminders(user.id)
+      setItems(getLocalNotifications(user.id))
+      setLoading(false)
+    }
+    void load()
   }, [user])
 
   const resolveGift = (item: Notification) => {
@@ -60,6 +71,17 @@ export default function NotificationsPage() {
     setUpdating(null)
   }
 
+  const openReminder = (item: Notification) => {
+    updateLocalNotification(item.id, { status: 'read' })
+    if (user) setItems(getLocalNotifications(user.id))
+    const personId = String(item.payload_json.person_id || '')
+    const occasionId = String(item.payload_json.occasion_id || '')
+    const params = new URLSearchParams()
+    if (personId) params.set('person', personId)
+    if (occasionId) params.set('occasion', occasionId)
+    navigate(params.size > 0 ? `/discover?${params.toString()}` : '/discover')
+  }
+
   return (
     <div className="min-h-screen bg-stone-50 pb-20">
       <PageHeader title="اعلان‌ها" back />
@@ -72,11 +94,25 @@ export default function NotificationsPage() {
           <EmptyState
             icon={<Bell size={32} />}
             title="اعلانی ندارید"
-            description="وقتی کسی برای شما هدیه بفرستد، اینجا نمایش داده می‌شود"
+            description="یادآوری مناسبت‌ها و هدیه‌های دریافتی اینجا نمایش داده می‌شود"
           />
         ) : (
           <div className="space-y-2">
             {items.map(item => {
+              if (isOccasionReminder(item)) {
+                const unread = item.status !== 'read'
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => openReminder(item)}
+                    className={`w-full text-right bg-white rounded-2xl border p-4 ${unread ? 'border-primary-200' : 'border-stone-100'}`}
+                  >
+                    <p className="text-sm text-stone-700 leading-7">
+                      {String(item.payload_json.message || '')}
+                    </p>
+                  </button>
+                )
+              }
               const giver = String(item.payload_json.giver_name || 'یک کاربر')
               const productTitle = String(item.payload_json.product_title || 'یک آیتم')
               const confirmed = !!item.payload_json.confirmed

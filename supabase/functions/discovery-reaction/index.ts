@@ -35,14 +35,20 @@ Deno.serve(async (req: Request) => {
     }
 
     const userId = userData.user.id;
-    const url = new URL(req.url);
-    const body: { product_id: string; reaction: string; session_id: string } = await req.json();
+    const body: { product_id: string; reaction: string; session_id: string; receiver_id?: string | null } = await req.json();
     const sessionId = body.session_id;
+    const productId = typeof body.product_id === "string" ? body.product_id.trim() : "";
 
-    const validReactions = ["no", "good", "great", "the_one"];
+    const validReactions = ["no", "good", "the_one"];
     if (!sessionId) {
       return new Response(
         JSON.stringify({ success: false, error: { code: "VALIDATION_ERROR", message: "شناسه جلسه لازم است" } }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!productId) {
+      return new Response(
+        JSON.stringify({ success: false, error: { code: "VALIDATION_ERROR", message: "شناسه محصول لازم است" } }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -75,22 +81,72 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Record the interaction
+    const servedProductIds: string[] = Array.isArray(session.served_product_ids)
+      ? session.served_product_ids.filter((id: unknown): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (!servedProductIds.includes(productId)) {
+      return new Response(
+        JSON.stringify({ success: false, error: { code: "VALIDATION_ERROR", message: "این محصول در این جلسه ارائه نشده است" } }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { data: existingReaction } = await supabase
+      .from("user_interactions")
+      .select("id")
+      .eq("session_id", sessionId)
+      .eq("product_id", productId)
+      .maybeSingle();
+    if (existingReaction) {
+      return new Response(
+        JSON.stringify({ success: false, error: { code: "CONFLICT", message: "واکنش این کارت قبلاً ثبت شده است" } }),
+        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const confirmedReceiverId = body.reaction === "the_one"
+      ? (body.receiver_id ?? null)
+      : (session.receiver_id || null);
+
+    if (body.reaction === "the_one" && confirmedReceiverId) {
+      const { data: person, error: personError } = await supabase
+        .from("close_people")
+        .select("id")
+        .eq("id", confirmedReceiverId)
+        .eq("owner_user_id", userId)
+        .maybeSingle();
+      if (personError || !person) {
+        return new Response(
+          JSON.stringify({ success: false, error: { code: "NOT_FOUND", message: "شخص نزدیک یافت نشد" } }),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     const { error: interactionError } = await supabase.from("user_interactions").insert({
       user_id: userId,
-      receiver_id: session.receiver_id,
-      product_id: body.product_id,
+      receiver_id: confirmedReceiverId,
+      product_id: productId,
       reaction_type: body.reaction,
       session_id: sessionId,
     });
 
     if (interactionError) {
+      if (interactionError.code === "23505") {
+        return new Response(
+          JSON.stringify({ success: false, error: { code: "CONFLICT", message: "واکنش این کارت قبلاً ثبت شده است" } }),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({ success: false, error: { code: "INTERNAL_ERROR", message: "خطا در ثبت واکنش" } }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    const maxCards = typeof session.max_cards === "number" && session.max_cards > 0
+      ? session.max_cards
+      : servedProductIds.length || 20;
     const newShownCount = session.shown_count + 1;
     let newStatus = "active";
     let reservationCreated = false;
@@ -99,31 +155,47 @@ Deno.serve(async (req: Request) => {
     if (body.reaction === "the_one") {
       newStatus = "completed";
 
-      // Create shopping list item (reservation)
+      if (confirmedReceiverId) {
+        const { data: receiver } = await supabase
+          .from("close_people")
+          .select("linked_user_id, name, owner_user_id")
+          .eq("id", confirmedReceiverId)
+          .maybeSingle();
+        const ownerUserId = receiver?.linked_user_id || null;
+        if (ownerUserId) {
+          const { data: claimed, error: claimError } = await supabase.rpc("claim_wishlist_hold", {
+            p_owner_user_id: ownerUserId,
+             p_product_id: productId,
+            p_reserved_by: userId,
+          });
+          if (claimError || claimed !== true) {
+            return new Response(
+              JSON.stringify({ success: false, error: { code: "CONFLICT", message: "این هدیه قبلاً رزرو شده است" } }),
+              { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+        }
+      }
+
       const { error: shopError } = await supabase.from("shopping_list_items").insert({
         user_id: userId,
-        receiver_id: session.receiver_id,
-        product_id: body.product_id,
+        receiver_id: confirmedReceiverId,
+        product_id: productId,
         status: "reserved",
         session_id: sessionId,
         reserved_at: new Date().toISOString(),
       });
 
-      if (!shopError) {
-        reservationCreated = true;
-        const { data: receiver } = await supabase
-          .from("close_people")
-          .select("linked_user_id, name, owner_user_id")
-          .eq("id", session.receiver_id)
-          .maybeSingle();
-        const ownerUserId = receiver?.linked_user_id
-          || (receiver?.name === "خودم" ? receiver.owner_user_id : null);
-        if (ownerUserId) {
-          await supabase.from("wishlist_items").update({
-            reserved_by_user_id: userId,
-            reserved_at: new Date().toISOString(),
-          }).eq("owner_user_id", ownerUserId).eq("product_id", body.product_id);
+      if (shopError) {
+        const duplicate = shopError.code === "23505";
+        if (duplicate) {
+          return new Response(
+            JSON.stringify({ success: false, error: { code: "CONFLICT", message: "این هدیه قبلاً رزرو شده است" } }),
+            { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
+      } else {
+        reservationCreated = true;
       }
 
       await supabase
@@ -139,7 +211,7 @@ Deno.serve(async (req: Request) => {
       const { data: product } = await supabase
         .from("products")
         .select("shop_url")
-        .eq("id", body.product_id)
+        .eq("id", productId)
         .maybeSingle();
 
       return new Response(
@@ -158,14 +230,13 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Check if 20 cards reached
-    if (newShownCount >= 20) {
+    if (newShownCount >= maxCards) {
       // Check if there were any positive reactions
       const { data: positiveInteractions } = await supabase
         .from("user_interactions")
         .select("reaction_type")
         .eq("session_id", sessionId)
-        .in("reaction_type", ["good", "great"]);
+        .in("reaction_type", ["good"]);
 
       if (positiveInteractions && positiveInteractions.length > 0) {
         newStatus = "review";
@@ -197,52 +268,40 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Still active — update shown count and return next card
     await supabase
       .from("discovery_sessions")
       .update({ shown_count: newShownCount })
       .eq("id", sessionId);
 
-    // Fetch next product (not yet interacted in this session)
     const { data: interacted } = await supabase
       .from("user_interactions")
       .select("product_id")
       .eq("session_id", sessionId);
 
-    const interactedIds = (interacted || []).map((i: { product_id: string }) => i.product_id);
-
-    // Get products within budget
-    const filters = session.filters_json as {
-      budget_min?: number;
-      budget_max?: number;
-    };
-
-    let query = supabase
-      .from("products")
-      .select("*")
-      .eq("availability", "in_stock")
-      .not("id", "in", `(${interactedIds.length > 0 ? interactedIds.join(",") : "00000000-0000-0000-0000-000000000000"})`);
-
-    if (filters.budget_min) query = query.gte("price_amount", filters.budget_min);
-    if (filters.budget_max) query = query.lte("price_amount", filters.budget_max);
-
-    const { data: nextProducts } = await query.limit(5);
+    const interactedIds = new Set((interacted || []).map((i: { product_id: string }) => i.product_id));
+    const nextProductId = servedProductIds.find((id: string) => !interactedIds.has(id)) || null;
 
     let nextCard = null;
-    if (nextProducts && nextProducts.length > 0) {
-      const p = nextProducts[0];
-      nextCard = {
-        id: crypto.randomUUID(),
-        product_id: p.id,
-        position: newShownCount + 1,
-        image_url: p.image_url,
-        title: p.title,
-        price: { amount: p.price_amount, currency: p.currency || "IRR" },
-        merchant: { name: p.merchant_name },
-        shop_url: p.shop_url,
-        category: p.category_slug,
-        availability: "in_stock",
-      };
+    if (nextProductId) {
+      const { data: nextProduct } = await supabase
+        .from("products")
+        .select("*")
+        .eq("id", nextProductId)
+        .maybeSingle();
+      if (nextProduct) {
+        nextCard = {
+          id: crypto.randomUUID(),
+          product_id: nextProduct.id,
+          position: newShownCount + 1,
+          image_url: nextProduct.image_url,
+          title: nextProduct.title,
+          price: { amount: nextProduct.price_amount, currency: nextProduct.currency || "IRT" },
+          merchant: { name: nextProduct.merchant_name },
+          shop_url: nextProduct.shop_url,
+          category: nextProduct.category_slug,
+          availability: "in_stock",
+        };
+      }
     }
 
     return new Response(
@@ -251,7 +310,7 @@ Deno.serve(async (req: Request) => {
         data: {
           session_status: "active",
           shown_cards: newShownCount,
-          remaining_cards: 20 - newShownCount,
+          remaining_cards: Math.max(0, maxCards - newShownCount),
           next_card: nextCard,
         },
         meta: { request_id: crypto.randomUUID() },

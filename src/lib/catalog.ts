@@ -15,7 +15,7 @@ function p(
     title,
     image_url,
     price_amount,
-    currency: 'IRR',
+    currency: 'IRT',
     shop_url: `https://basalam.com/${id}`,
     merchant_name,
     category_id: null,

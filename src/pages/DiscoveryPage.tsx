@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Check } from 'lucide-react'
-import { supabase } from '../lib/supabase'
+import { claimWishlistHold, supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, MyOccasion, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS, sortPeopleByNearestOccasion } from '../lib/types'
 import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson, getAllDisplayOccasionsForOwner, getDisplayOccasionsForPerson, getLocalOccasions, setLocalWishlistHold } from '../lib/localStore'
@@ -76,7 +76,7 @@ export default function DiscoveryPage() {
   const PEOPLE_PAGE_SIZE = 10
   const AGE_RANGE_OPTIONS = [
     { id: 'under3', label: 'زیر ۳ سال' },
-    { id: '4to7', label: '۴ تا ۷ سال' },
+    { id: '3to7', label: '۳ تا ۷ سال' },
     { id: '8to15', label: '۸ تا ۱۵ سال' },
     { id: 'over15', label: 'بالای ۱۵ سال' },
   ]
@@ -84,9 +84,10 @@ export default function DiscoveryPage() {
   useEffect(() => {
     if (!user) return
     const applyPeople = (list: ClosePerson[], occasions: Occasion[]) => {
-      setPeople(sortPeopleByNearestOccasion(list, occasions))
+      const others = list.filter(p => p.name !== 'خودم')
+      setPeople(sortPeopleByNearestOccasion(others, occasions))
       setPeopleVisibleCount(PEOPLE_PAGE_SIZE)
-      if (personId) {
+      if (personId && others.some(p => p.id === personId)) {
         setSelectedPerson(personId)
         setStep('budget')
       }
@@ -166,7 +167,7 @@ export default function DiscoveryPage() {
     if (personOverride) setSelectedPerson(personOverride)
     setLoading(true)
     setError('')
-    if (isLocalUser || !receiverId) {
+    if (isLocalUser) {
       startLocalSession()
       setLoading(false)
       return
@@ -179,7 +180,7 @@ export default function DiscoveryPage() {
           'Authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
         },
         body: JSON.stringify({
-          receiver_id: receiverId,
+          receiver_id: receiverId || null,
           budget_min: budgetMin,
           budget_max: budgetMax,
           age_range: ageRange,
@@ -211,25 +212,17 @@ export default function DiscoveryPage() {
   }
 
   const markWishlistReserved = async (receiverId: string, productId: string) => {
-    if (!user) return
+    if (!user) return true
     const receiver = people.find(p => p.id === receiverId)
-    const ownerUserId = receiver?.linked_user_id
-      || (receiver?.name === 'خودم' ? receiver.owner_user_id : null)
-    if (!ownerUserId) return
-    setLocalWishlistHold(ownerUserId, productId, user.id)
-    if (user.id.startsWith('local-')) return
-    try {
-      await supabase.from('wishlist_items').update({
-        reserved_by_user_id: user.id,
-        reserved_at: new Date().toISOString(),
-      }).eq('owner_user_id', ownerUserId).eq('product_id', productId)
-    } catch {
-      // local fallback
-    }
+    const ownerUserId = receiver?.linked_user_id || null
+    if (!ownerUserId) return true
+    if (!setLocalWishlistHold(ownerUserId, productId, user.id)) return false
+    if (user.id.startsWith('local-')) return true
+    return claimWishlistHold(ownerUserId, productId, user.id)
   }
 
   const finishLocalReview = (reactions: { product_id: string; reaction: ReactionType }[]) => {
-    const liked = reactions.filter(r => r.reaction === 'good' || r.reaction === 'great')
+    const liked = reactions.filter(r => r.reaction === 'good')
     if (liked.length === 0) {
       setStep('failed')
       return
@@ -241,7 +234,7 @@ export default function DiscoveryPage() {
       items.push({
         product,
         best_reaction: r.reaction,
-        score: r.reaction === 'great' ? 8 : 5,
+        score: 5,
       })
     }
     items.sort((a, b) => b.score - a.score)
@@ -334,7 +327,7 @@ export default function DiscoveryPage() {
       .from('user_interactions')
       .select('reaction_type, product_id, product:products(*)')
       .eq('session_id', session.session_id)
-      .in('reaction_type', ['good', 'great'])
+      .in('reaction_type', ['good'])
 
     if (interactions) {
       const items = interactions
@@ -342,7 +335,7 @@ export default function DiscoveryPage() {
         .map((i) => ({
           product: Array.isArray(i.product) ? (i.product[0] as Product) : (i.product as Product),
           best_reaction: i.reaction_type,
-          score: i.reaction_type === 'great' ? 8 : 5,
+          score: 5,
         }))
         .sort((a, b) => b.score - a.score)
       setReviewItems(items as typeof reviewItems)
@@ -421,10 +414,12 @@ export default function DiscoveryPage() {
     setSendInvite(false)
   }
 
+  const entryReceiverId = [personId, selectedPerson].find(id => !!id && people.some(p => p.id === id)) || ''
+
   const openPersonPrompt = (productId: string) => {
     setPendingTheOneProductId(productId)
-    setPersonPromptStep(personId || selectedPerson ? 'pick' : 'ask')
-    setPickerReceiverId(personId || selectedPerson || '')
+    setPersonPromptStep(entryReceiverId ? 'pick' : 'ask')
+    setPickerReceiverId(entryReceiverId)
     resetAddReceiverForm()
   }
 
@@ -440,7 +435,15 @@ export default function DiscoveryPage() {
     setPendingTheOneProductId(null)
     setPersonPromptStep(null)
     setLoading(true)
-    const finishLocal = () => {
+    const finishLocal = async () => {
+      if (receiverId) {
+        const held = await markWishlistReserved(receiverId, productId)
+        if (!held) {
+          setToastMsg('این هدیه قبلاً رزرو شده است')
+          setTimeout(() => setToastMsg(''), 2500)
+          return false
+        }
+      }
       if (user) {
         createLocalShoppingItem({
           user_id: user.id,
@@ -448,13 +451,13 @@ export default function DiscoveryPage() {
           product_id: productId,
           session_id: session?.session_id,
         })
-        if (receiverId) void markWishlistReserved(receiverId, productId)
       }
       setShopUrl(getCatalogProduct(productId)?.shop_url || null)
       setStep('success')
+      return true
     }
     if (isLocalUser || localDeck.length > 0 || !session) {
-      finishLocal()
+      await finishLocal()
       setLoading(false)
       return
     }
@@ -470,10 +473,16 @@ export default function DiscoveryPage() {
           product_id: productId,
           reaction: 'the_one',
           session_id: session.session_id,
+          receiver_id: receiverId,
         }),
       })
       const data = await res.json()
       if (data.success) {
+        if (data.data?.reservation_created === false) {
+          setToastMsg('این هدیه قبلاً رزرو شده است')
+          setTimeout(() => setToastMsg(''), 2500)
+          return
+        }
         if (user) {
           createLocalShoppingItem({
             user_id: user.id,
@@ -481,15 +490,18 @@ export default function DiscoveryPage() {
             product_id: productId,
             session_id: session.session_id,
           })
-          if (receiverId) void markWishlistReserved(receiverId, productId)
+          if (receiverId) await markWishlistReserved(receiverId, productId)
         }
         setShopUrl(data.data.shop_url)
         setStep('success')
+      } else if (data.error?.code === 'CONFLICT') {
+        setToastMsg('این هدیه قبلاً رزرو شده است')
+        setTimeout(() => setToastMsg(''), 2500)
       } else {
-        finishLocal()
+        await finishLocal()
       }
     } catch {
-      finishLocal()
+      await finishLocal()
     } finally {
       setLoading(false)
     }
@@ -653,55 +665,35 @@ export default function DiscoveryPage() {
             />
           ) : (
             (() => {
-              const selfPerson = people.find(p => p.name === 'خودم')
-              const others = people.filter(p => p.name !== 'خودم')
-              const visibleOthers = others.slice(0, peopleVisibleCount)
-              const renderPerson = (person: ClosePerson, self: boolean) => (
-                <button
-                  key={person.id}
-                  onClick={() => { setSelectedPerson(person.id); setStep('budget') }}
-                  className={`w-full flex items-center gap-3 p-3.5 rounded-2xl border hover:shadow-md transition-all text-right ${
-                    self
-                      ? 'bg-primary-50 border-primary-300 hover:border-primary-400'
-                      : 'bg-white border-stone-100 hover:border-primary-300'
-                  }`}
-                >
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-lg font-bold shrink-0 ${
-                    self ? 'bg-gradient-to-br from-primary-500 to-primary-700' : 'bg-gradient-to-br from-primary-200 to-primary-400'
-                  }`}>
-                    {person.name.charAt(0)}
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-semibold text-stone-800">{person.name}</p>
-                    <p className="text-xs text-stone-500">
-                      {self ? 'هدیه برای خودم' : closenessLabel(person.closeness)}
-                    </p>
-                  </div>
-                  <ChevronLeft size={20} className="text-stone-400" />
-                </button>
-              )
+              const visiblePeople = people.slice(0, peopleVisibleCount)
               return (
-                <>
-                  {selfPerson && (
-                    <div className="mb-5">
-                      {renderPerson(selfPerson, true)}
-                    </div>
+                <div className="space-y-2">
+                  {visiblePeople.map(person => (
+                    <button
+                      key={person.id}
+                      onClick={() => { setSelectedPerson(person.id); setStep('budget') }}
+                      className="w-full flex items-center gap-3 p-3.5 rounded-2xl border bg-white border-stone-100 hover:border-primary-300 hover:shadow-md transition-all text-right"
+                    >
+                      <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-lg font-bold shrink-0 bg-gradient-to-br from-primary-200 to-primary-400">
+                        {person.name.charAt(0)}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-semibold text-stone-800">{person.name}</p>
+                        <p className="text-xs text-stone-500">{closenessLabel(person.closeness)}</p>
+                      </div>
+                      <ChevronLeft size={20} className="text-stone-400" />
+                    </button>
+                  ))}
+                  {people.length > peopleVisibleCount && (
+                    <button
+                      type="button"
+                      onClick={() => setPeopleVisibleCount(count => count + PEOPLE_PAGE_SIZE)}
+                      className="w-full py-3 rounded-2xl bg-stone-100 text-stone-700 text-sm font-medium hover:bg-stone-200 transition-colors"
+                    >
+                      دیدن موارد بیشتر
+                    </button>
                   )}
-                  {others.length > 0 && (
-                    <div className="space-y-2">
-                      {visibleOthers.map(person => renderPerson(person, false))}
-                      {others.length > peopleVisibleCount && (
-                        <button
-                          type="button"
-                          onClick={() => setPeopleVisibleCount(count => count + PEOPLE_PAGE_SIZE)}
-                          className="w-full py-3 rounded-2xl bg-stone-100 text-stone-700 text-sm font-medium hover:bg-stone-200 transition-colors"
-                        >
-                          دیدن موارد بیشتر
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </>
+                </div>
               )
             })()
           )}
@@ -730,20 +722,22 @@ export default function DiscoveryPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowCardDetails(v => !v)}
-            className="relative w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden bg-stone-100 shadow-xl animate-slide-up text-right"
-          >
-            {currentCard.image_url ? (
-              <img src={currentCard.image_url} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <ShoppingBag size={40} className="text-stone-300" />
-              </div>
-            )}
+          <div className="relative w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden bg-stone-100 shadow-xl animate-slide-up">
+            <button
+              type="button"
+              onClick={() => setShowCardDetails(v => !v)}
+              className="absolute inset-0 z-0 text-right"
+            >
+              {currentCard.image_url ? (
+                <img src={currentCard.image_url} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <span className="w-full h-full flex items-center justify-center">
+                  <ShoppingBag size={40} className="text-stone-300" />
+                </span>
+              )}
+            </button>
             {showCardDetails && (
-              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent flex flex-col justify-end p-5 text-white">
+              <div className="absolute inset-0 z-10 pointer-events-none bg-gradient-to-t from-black/75 via-black/20 to-transparent flex flex-col justify-end p-5 text-white">
                 <h3 className="font-bold text-lg leading-tight mb-2">{currentCard.title}</h3>
                 <p className="text-lg font-bold mb-3">{formatPrice(currentCard.price.amount)}</p>
                 {currentCard.shop_url && (
@@ -751,15 +745,14 @@ export default function DiscoveryPage() {
                     href={currentCard.shop_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="inline-flex items-center justify-center gap-1.5 self-end px-4 py-2 rounded-xl bg-primary-500 text-white text-sm font-medium"
+                    className="pointer-events-auto inline-flex items-center justify-center gap-1.5 self-end px-4 py-2 rounded-xl bg-primary-500 text-white text-sm font-medium"
                   >
                     <ShoppingBag size={14} /> خرید
                   </a>
                 )}
               </div>
             )}
-          </button>
+          </div>
 
           <div className="w-full max-w-sm mt-6 grid grid-cols-3 gap-2">
             <ReactionButton
@@ -1050,7 +1043,7 @@ export default function DiscoveryPage() {
                     <option value="">یک نفر را انتخاب کنید</option>
                     {people.map(p => (
                       <option key={p.id} value={p.id}>
-                        {p.name}{p.name === 'خودم' ? '' : ` (${closenessLabel(p.closeness)})`}
+                        {p.name} ({closenessLabel(p.closeness)})
                       </option>
                     ))}
                   </select>

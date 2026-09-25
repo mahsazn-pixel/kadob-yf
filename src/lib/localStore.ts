@@ -182,16 +182,24 @@ function receiverOwnerUserId(receiverId: string | null | undefined): string | nu
   return receiver.linked_user_id || (receiver.name === 'خودم' ? receiver.owner_user_id : null)
 }
 
-export function setLocalWishlistHold(ownerUserId: string, productId: string, reservedByUserId: string | null) {
+export function setLocalWishlistHold(ownerUserId: string, productId: string, reservedByUserId: string | null): boolean {
   const all = getAllLocalWishlist()
+  let denied = false
   let changed = false
   const next = all.map(item => {
     if (item.owner_user_id !== ownerUserId || item.product_id !== productId) return item
-    if ((item.reserved_by_user_id || null) === reservedByUserId) return item
+    const current = item.reserved_by_user_id || null
+    if (reservedByUserId && current && current !== reservedByUserId) {
+      denied = true
+      return item
+    }
+    if (current === reservedByUserId) return item
     changed = true
     return { ...item, reserved_by_user_id: reservedByUserId }
   })
+  if (denied) return false
   if (changed) writeJson(WISHLIST_KEY, next)
+  return true
 }
 
 function syncWishlistHoldFromShopping(item: ShoppingListItem, clear = false) {
@@ -339,6 +347,26 @@ export function updateLocalNotification(id: string, updates: Partial<Notificatio
   const next = { ...all[index], ...updates, id: all[index].id }
   all[index] = next
   writeJson(NOTIFICATIONS_KEY, all)
+  return next
+}
+
+export function mergeLocalNotifications(items: Notification[]): Notification[] {
+  if (items.length === 0) return getAllLocalNotifications()
+  const all = getAllLocalNotifications()
+  const byId = new Set(all.map(item => item.id))
+  const byKey = new Set(all.map(item => `${item.type}:${item.payload_json.occasion_id || ''}:${item.payload_json.year || ''}`))
+  const incoming: Notification[] = []
+  for (const item of items) {
+    if (byId.has(item.id)) continue
+    const key = `${item.type}:${item.payload_json.occasion_id || ''}:${item.payload_json.year || ''}`
+    if ((item.type === 'occasion_two_weeks' || item.type === 'occasion_six_days') && byKey.has(key)) continue
+    incoming.push(item)
+    byId.add(item.id)
+    byKey.add(key)
+  }
+  if (incoming.length === 0) return all
+  const next = [...incoming, ...all]
+  writeJson(NOTIFICATIONS_KEY, next)
   return next
 }
 

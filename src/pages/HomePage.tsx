@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { ClosePerson, Occasion, MyOccasion, ShoppingListItem, daysUntilOccasion, formatRemainingTime, sortPeopleByNearestOccasion } from '../lib/types'
 import { getLocalPeople, getUpcomingLocalOccasions, getLocalShoppingItems, ensureDemoClosePerson, getDisplayOccasionsForPerson, getLocalOccasions, getLocalNotifications } from '../lib/localStore'
+import { ensureOccasionReminders } from '../lib/occasionReminders'
 import GreetingModal from '../components/GreetingModal'
 import BottomNav from '../components/BottomNav'
 
@@ -22,23 +23,29 @@ export default function HomePage() {
     fetchHomeData()
   }, [user])
 
+  const refreshUnread = () => {
+    setUnreadCount(getLocalNotifications(user!.id).filter(n => n.status === 'unread').length)
+  }
+
   const fetchHomeData = async () => {
     setLoading(true)
-    const applyLocal = () => {
+    const applyLocal = async () => {
       ensureDemoClosePerson(user!.id)
       const localPeople = getLocalPeople(user!.id)
       const allOcc = getUpcomingLocalOccasions(user!.id)
+      const shopList = getLocalShoppingItems(user!.id)
       setPeople(sortPeopleByNearestOccasion(localPeople, allOcc))
       const upcoming = allOcc
         .filter(o => daysUntilOccasion(o) >= -1)
         .sort((a, b) => daysUntilOccasion(a) - daysUntilOccasion(b))
         .slice(0, 3)
       setOccasions(upcoming)
-      setShoppingItems(getLocalShoppingItems(user!.id).slice(0, 5))
-      setUnreadCount(getLocalNotifications(user!.id).filter(n => n.status === 'unread').length)
+      setShoppingItems(shopList.slice(0, 5))
+      await ensureOccasionReminders(user!.id)
+      refreshUnread()
     }
     if (user!.id.startsWith('local-')) {
-      applyLocal()
+      await applyLocal()
       setLoading(false)
       return
     }
@@ -84,6 +91,9 @@ export default function HomePage() {
           .sort((a, b) => daysUntilOccasion(a) - daysUntilOccasion(b))
           .slice(0, 3)
         setOccasions(upcoming)
+
+        await ensureOccasionReminders(user!.id)
+        refreshUnread()
       } else {
         setPeople([])
       }
@@ -95,8 +105,12 @@ export default function HomePage() {
         .order('created_at', { ascending: false })
         .limit(5)
       setShoppingItems(shoppingData || [])
+      if (peopleList.length === 0) {
+        await ensureOccasionReminders(user!.id)
+        refreshUnread()
+      }
     } catch {
-      applyLocal()
+      await applyLocal()
     } finally {
       setLoading(false)
     }
