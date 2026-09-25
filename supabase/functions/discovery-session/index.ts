@@ -9,11 +9,57 @@ const corsHeaders = {
 interface SessionFilters {
   receiver_id?: string | null;
   age_group?: string;
-  gender?: string;
+  age_range?: string | null;
+  gender?: string | null;
   closeness?: string;
   budget_min?: number;
   budget_max?: number;
   occasion_id?: string | null;
+}
+
+function inferProductGender(title: string, category: string | null): "male" | "female" | "unisex" {
+  if (/مردانه/.test(title)) return "male";
+  if (/زنانه|آرایشی|رژ لب/.test(title)) return "female";
+  if (category === "beauty") return "female";
+  if (category === "jewelry" && /گردنبند|آویز|طلا/.test(title)) return "female";
+  return "unisex";
+}
+
+function genderScore(title: string, category: string | null, gender?: string | null): number {
+  if (!gender || gender === "unknown") return 0;
+  const inferred = inferProductGender(title, category);
+  if (inferred === "unisex") return 1;
+  if (inferred === gender) return 7;
+  return -10;
+}
+
+function ageScore(title: string, category: string | null, ageRange?: string | null): number {
+  if (!ageRange) return 0;
+  const cat = category || "";
+  const isKidsItem = cat === "kids" || /کودک|نوزاد|اسباب‌بازی/.test(title);
+  if (ageRange === "under3") {
+    if (isKidsItem) return 10;
+    if (["jewelry", "perfume", "beauty", "digital", "gaming", "home_appliance", "bag", "clothing"].includes(cat)) return -8;
+    return -3;
+  }
+  if (ageRange === "3to7") {
+    if (isKidsItem) return 9;
+    if (cat === "book" || cat === "food" || cat === "plant" || cat === "gaming") return 2;
+    if (["jewelry", "perfume", "beauty", "home_appliance"].includes(cat)) return -7;
+    return -1;
+  }
+  if (ageRange === "8to15") {
+    if (cat === "gaming" || cat === "digital" || isKidsItem) return 7;
+    if (cat === "book" || cat === "clothing" || cat === "bag" || cat === "accessories") return 3;
+    if (["jewelry", "perfume", "beauty", "home_appliance"].includes(cat)) return -4;
+    return 1;
+  }
+  if (ageRange === "over15") {
+    if (isKidsItem) return -8;
+    if (["jewelry", "perfume", "beauty", "accessories", "digital", "bag"].includes(cat)) return 4;
+    return 2;
+  }
+  return 0;
 }
 
 Deno.serve(async (req: Request) => {
@@ -48,6 +94,8 @@ Deno.serve(async (req: Request) => {
     const userId = userData.user.id;
     const body: SessionFilters = await req.json();
     const receiverId = body.receiver_id || null;
+    const ageRange = body.age_range || body.age_group || null;
+    const gender = body.gender || null;
 
     if (receiverId) {
       const { data: person, error: personError } = await supabase
@@ -147,8 +195,10 @@ Deno.serve(async (req: Request) => {
       availableProducts = products;
     }
 
-    // Simple ranking: wishlist boost + diversity by category
-    const ranked = availableProducts.map((p: {
+    const budgetMin = body.budget_min || 0;
+    const budgetMax = body.budget_max || Number.MAX_SAFE_INTEGER;
+
+    const scoreProduct = (p: {
       id: string;
       category_slug: string | null;
       price_amount: number;
@@ -160,35 +210,45 @@ Deno.serve(async (req: Request) => {
     }) => {
       let score = 0;
       if (wishlistProductIds.has(p.id)) score += 5;
-      // Budget fit: closer to midpoint = better
-      if (body.budget_min && body.budget_max) {
-        const mid = (body.budget_min + body.budget_max) / 2;
-        const dist = Math.abs(p.price_amount - mid) / mid;
-        score += Math.max(0, 3 - dist * 3);
+      const inBudget = p.price_amount >= budgetMin && p.price_amount <= budgetMax;
+      if (inBudget && budgetMax > budgetMin) {
+        const mid = (budgetMin + budgetMax) / 2;
+        const dist = Math.abs(p.price_amount - mid) / Math.max(mid, 1);
+        score += Math.max(0, 5 - dist * 5);
+      } else if (!inBudget) {
+        score -= 6;
       }
-      // Add some randomness for diversity
-      score += Math.random() * 2;
+      score += genderScore(p.title, p.category_slug, gender);
+      score += ageScore(p.title, p.category_slug, ageRange);
+      score += Math.random() * 1.2;
       return { ...p, _score: score };
-    });
+    };
 
-    // Sort by score descending
+    let ranked = availableProducts.map(scoreProduct).filter((p: { _score: number }) => p._score > -8);
+    if (ranked.length < 4) {
+      ranked = availableProducts.map(scoreProduct);
+    }
+
     ranked.sort((a: { _score: number }, b: { _score: number }) => b._score - a._score);
 
-    // Take top 20 and ensure category diversity
-    const seenCategories = new Set<string>();
-    const diverseProducts: typeof ranked = [];
-    const remainingProducts: typeof ranked = [];
-
-    for (const p of ranked) {
-      const cat = p.category_slug || "other";
-      if (!seenCategories.has(cat) || diverseProducts.length < 10) {
-        diverseProducts.push(p);
-        seenCategories.add(cat);
-      } else {
-        remainingProducts.push(p);
+    const preferKids = ageRange === "under3" || ageRange === "3to7";
+    let finalProducts = ranked;
+    if (!preferKids) {
+      const seenCategories = new Set<string>();
+      const diverseProducts: typeof ranked = [];
+      const remainingProducts: typeof ranked = [];
+      for (const p of ranked) {
+        const cat = p.category_slug || "other";
+        if (!seenCategories.has(cat) || diverseProducts.length < 10) {
+          diverseProducts.push(p);
+          seenCategories.add(cat);
+        } else {
+          remainingProducts.push(p);
+        }
       }
+      finalProducts = [...diverseProducts, ...remainingProducts];
     }
-    const finalProducts = [...diverseProducts, ...remainingProducts].slice(0, 20);
+    finalProducts = finalProducts.slice(0, 20);
     const servedProductIds = finalProducts.map((p) => p.id);
 
     const { error: servedError } = await supabase

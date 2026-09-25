@@ -1,11 +1,11 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { X, ThumbsUp, Sparkles, Heart, Loader2, ShoppingBag, RotateCcw, Frown, ChevronLeft, Check } from 'lucide-react'
 import { claimWishlistHold, supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { ClosePerson, Occasion, MyOccasion, Product, ReactionType, REACTION_LABELS, closenessLabel, formatPrice, CLOSENESS_OPTIONS, sortPeopleByNearestOccasion } from '../lib/types'
 import { getLocalPeople, addLocalWishlistItem, createLocalShoppingItem, createLocalPerson, findLocalProfileByPhone, applyLinkedAccountToPerson, getAllDisplayOccasionsForOwner, getDisplayOccasionsForPerson, getLocalOccasions, setLocalWishlistHold } from '../lib/localStore'
-import { getCatalogProduct, rankProductsForDiscovery, productToCard } from '../lib/catalog'
+import { getCatalogProduct, rankProductsForDiscovery, productToCard, ageRangeFromBirthDate } from '../lib/catalog'
 import PageHeader from '../components/PageHeader'
 import BottomNav from '../components/BottomNav'
 import EmptyState from '../components/EmptyState'
@@ -45,6 +45,7 @@ export default function DiscoveryPage() {
   const [budgetMin, setBudgetMin] = useState(500000)
   const [budgetMax, setBudgetMax] = useState(5000000)
   const [ageRange, setAgeRange] = useState<string | null>(null)
+  const [gender, setGender] = useState<string | null>(null)
   const [step, setStep] = useState<'select' | 'budget' | 'discovery' | 'review' | 'failed' | 'success'>('select')
   const [session, setSession] = useState<SessionData | null>(null)
   const [currentCards, setCurrentCards] = useState<Card[]>([])
@@ -80,6 +81,15 @@ export default function DiscoveryPage() {
     { id: '8to15', label: '۸ تا ۱۵ سال' },
     { id: 'over15', label: 'بالای ۱۵ سال' },
   ]
+  const GENDER_OPTIONS = [
+    { id: 'female', label: 'زن' },
+    { id: 'male', label: 'مرد' },
+  ]
+
+  const applyReceiverFilters = (person: ClosePerson) => {
+    setGender(person.gender === 'male' || person.gender === 'female' ? person.gender : null)
+    setAgeRange(ageRangeFromBirthDate(person.birth_date))
+  }
 
   useEffect(() => {
     if (!user) return
@@ -88,7 +98,9 @@ export default function DiscoveryPage() {
       setPeople(sortPeopleByNearestOccasion(others, occasions))
       setPeopleVisibleCount(PEOPLE_PAGE_SIZE)
       if (personId && others.some(p => p.id === personId)) {
+        const matched = others.find(p => p.id === personId)
         setSelectedPerson(personId)
+        if (matched) applyReceiverFilters(matched)
         setStep('budget')
       }
     }
@@ -140,7 +152,7 @@ export default function DiscoveryPage() {
   }, [user, personId])
 
   const startLocalSession = () => {
-    const products = rankProductsForDiscovery(budgetMin, budgetMax, 20)
+    const products = rankProductsForDiscovery(budgetMin, budgetMax, { ageRange, gender, limit: 20 })
     if (products.length === 0) {
       setError('محصولی در این بازه قیمت پیدا نشد')
       return false
@@ -184,6 +196,7 @@ export default function DiscoveryPage() {
           budget_min: budgetMin,
           budget_max: budgetMax,
           age_range: ageRange,
+          gender,
           occasion_id: occasionId,
         }),
       })
@@ -671,7 +684,7 @@ export default function DiscoveryPage() {
                   {visiblePeople.map(person => (
                     <button
                       key={person.id}
-                      onClick={() => { setSelectedPerson(person.id); setStep('budget') }}
+                      onClick={() => { setSelectedPerson(person.id); applyReceiverFilters(person); setStep('budget') }}
                       className="w-full flex items-center gap-3 p-3.5 rounded-2xl border bg-white border-stone-100 hover:border-primary-300 hover:shadow-md transition-all text-right"
                     >
                       <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-lg font-bold shrink-0 bg-gradient-to-br from-primary-200 to-primary-400">
@@ -925,7 +938,7 @@ export default function DiscoveryPage() {
                 <X size={20} className="text-stone-500" />
               </button>
             </div>
-            <p className="text-sm text-stone-600 mb-4">بازه قیمت هدیه را مشخص کنید</p>
+            <p className="text-sm text-stone-600 mb-4">سن، جنسیت و بازه قیمت در انتخاب کادو لحاظ می‌شود</p>
             <div className="space-y-4 mb-4">
               <div>
                 <label className="text-sm text-stone-600 mb-1 block">حداقل قیمت (تومان)</label>
@@ -944,6 +957,25 @@ export default function DiscoveryPage() {
                   onChange={(e) => setBudgetMax(Number(e.target.value))}
                   className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-primary-400 focus:ring-2 focus:ring-primary-100 outline-none transition-all"
                 />
+              </div>
+              <div>
+                <p className="text-sm text-stone-600 mb-2">جنسیت</p>
+                <div className="flex gap-2 flex-wrap">
+                  {GENDER_OPTIONS.map(option => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setGender(option.id === gender ? null : option.id)}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        gender === option.id
+                          ? 'bg-primary-100 text-primary-700'
+                          : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-600'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div>
                 <p className="text-sm text-stone-600 mb-2">بازه سنی</p>

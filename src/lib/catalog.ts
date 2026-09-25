@@ -71,22 +71,132 @@ export const LOCAL_PRODUCTS: Product[] = [
   p('p040', 'کارت هدیه دیجیتال ۵۰۰ هزار تومانی', 'https://images.pexels.com/photos/1029141/pexels-photo-1029141.jpeg', 500000, 'کادوبا', 'book'),
 ]
 
+export type DiscoveryAgeRange = 'under3' | '3to7' | '8to15' | 'over15'
+export type DiscoveryGender = 'male' | 'female' | 'unknown'
+
+export function ageRangeFromBirthDate(birthDate: string | null | undefined): DiscoveryAgeRange | null {
+  if (!birthDate) return null
+  const date = new Date(birthDate)
+  if (Number.isNaN(date.getTime())) return null
+  const now = new Date()
+  let age = now.getFullYear() - date.getFullYear()
+  const monthDiff = now.getMonth() - date.getMonth()
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < date.getDate())) age -= 1
+  if (age < 0) return null
+  if (age < 3) return 'under3'
+  if (age <= 7) return '3to7'
+  if (age <= 15) return '8to15'
+  return 'over15'
+}
+
+export interface DiscoveryRankFilters {
+  budgetMin: number
+  budgetMax: number
+  ageRange?: string | null
+  gender?: string | null
+  limit?: number
+}
+
+function inferProductGender(title: string, category: string | null): 'male' | 'female' | 'unisex' {
+  if (/مردانه/.test(title)) return 'male'
+  if (/زنانه|آرایشی|رژ لب/.test(title)) return 'female'
+  if (category === 'beauty') return 'female'
+  if (category === 'jewelry' && /گردنبند|آویز|طلا/.test(title)) return 'female'
+  return 'unisex'
+}
+
+function genderScore(title: string, category: string | null, gender?: string | null): number {
+  if (!gender || gender === 'unknown') return 0
+  const inferred = inferProductGender(title, category)
+  if (inferred === 'unisex') return 1
+  if (inferred === gender) return 7
+  return -10
+}
+
+function ageScore(title: string, category: string | null, ageRange?: string | null): number {
+  if (!ageRange) return 0
+  const cat = category || ''
+  const isKidsItem = cat === 'kids' || /کودک|نوزاد|اسباب‌بازی/.test(title)
+  if (ageRange === 'under3') {
+    if (isKidsItem) return 10
+    if (['jewelry', 'perfume', 'beauty', 'digital', 'gaming', 'home_appliance', 'bag', 'clothing'].includes(cat)) return -8
+    return -3
+  }
+  if (ageRange === '3to7') {
+    if (isKidsItem) return 9
+    if (cat === 'book' || cat === 'food' || cat === 'plant' || cat === 'gaming') return 2
+    if (['jewelry', 'perfume', 'beauty', 'home_appliance'].includes(cat)) return -7
+    return -1
+  }
+  if (ageRange === '8to15') {
+    if (cat === 'gaming' || cat === 'digital' || isKidsItem) return 7
+    if (cat === 'book' || cat === 'clothing' || cat === 'bag' || cat === 'accessories') return 3
+    if (['jewelry', 'perfume', 'beauty', 'home_appliance'].includes(cat)) return -4
+    return 1
+  }
+  if (ageRange === 'over15') {
+    if (isKidsItem) return -8
+    if (['jewelry', 'perfume', 'beauty', 'accessories', 'digital', 'bag'].includes(cat)) return 4
+    return 2
+  }
+  return 0
+}
+
+export function scoreProductForDiscovery(
+  item: { title: string; category_slug: string | null; price_amount: number },
+  filters: { budgetMin: number; budgetMax: number; ageRange?: string | null; gender?: string | null },
+): number {
+  const { budgetMin, budgetMax, ageRange, gender } = filters
+  const mid = (budgetMin + budgetMax) / 2
+  const inBudget = item.price_amount >= budgetMin && item.price_amount <= budgetMax
+  let score = 0
+  if (inBudget) {
+    const dist = Math.abs(item.price_amount - mid) / Math.max(mid, 1)
+    score += Math.max(0, 5 - dist * 5)
+  } else {
+    score -= 6
+  }
+  score += genderScore(item.title, item.category_slug, gender)
+  score += ageScore(item.title, item.category_slug, ageRange)
+  score += Math.random() * 1.2
+  return score
+}
+
 export function getCatalogProduct(id: string): Product | undefined {
   return LOCAL_PRODUCTS.find(item => item.id === id)
 }
 
-export function rankProductsForDiscovery(budgetMin: number, budgetMax: number, limit = 20): Product[] {
+export function rankProductsForDiscovery(
+  budgetMin: number,
+  budgetMax: number,
+  options: { ageRange?: string | null; gender?: string | null; limit?: number } = {},
+): Product[] {
+  const { ageRange, gender, limit = 20 } = options
   const inBudget = LOCAL_PRODUCTS.filter(item => item.price_amount >= budgetMin && item.price_amount <= budgetMax)
-  const pool = inBudget.length >= 6 ? inBudget : LOCAL_PRODUCTS
-  const mid = (budgetMin + budgetMax) / 2
-  return [...pool]
-    .map(item => {
-      const dist = Math.abs(item.price_amount - mid) / Math.max(mid, 1)
-      return { item, score: Math.max(0, 3 - dist * 3) + Math.random() * 2 }
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(entry => entry.item)
+  const scoredInBudget = inBudget
+    .map(item => ({ item, score: scoreProductForDiscovery(item, { budgetMin, budgetMax, ageRange, gender }) }))
+    .filter(entry => entry.score > -8)
+  const pool = scoredInBudget.length >= 4
+    ? scoredInBudget
+    : LOCAL_PRODUCTS.map(item => ({ item, score: scoreProductForDiscovery(item, { budgetMin, budgetMax, ageRange, gender }) }))
+  const ranked = [...pool].sort((a, b) => b.score - a.score)
+  const preferKids = ageRange === 'under3' || ageRange === '3to7'
+  if (preferKids) {
+    return ranked.slice(0, limit).map(entry => entry.item)
+  }
+  const seen = new Set<string>()
+  const diverse: Product[] = []
+  const rest: Product[] = []
+  for (const entry of ranked) {
+    const cat = entry.item.category_slug || 'other'
+    if (!seen.has(cat) || diverse.length < 8) {
+      diverse.push(entry.item)
+      seen.add(cat)
+    } else {
+      rest.push(entry.item)
+    }
+  }
+  return [...diverse, ...rest].slice(0, limit)
 }
 
 export function productToCard(product: Product, position: number) {
